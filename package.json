@@ -1,0 +1,25 @@
+{
+  "name": "nx-search",
+  "version": "0.1.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "scan": "node ./bin/nx.js scan",
+    "search": "node ./bin/nx.js search"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "type": "module",
+  "bin": {
+    "nx": "./bin/nx.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "mammoth": "^1.12.1",
+    "pdf-parse": "^2.4.5",
+    "sharp": "^0.35.3",
+    "xlsx": "^0.18.5"
+  }
+}
