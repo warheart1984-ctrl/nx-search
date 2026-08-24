@@ -35,6 +35,10 @@ function usage() {
       --native           cloud vision only (no tokens)
       --save             store description in the search index
       --q "question"     custom question about the image
+  nx spatialize <dir>   spatial + temporal memory for every rendered frame
+      --every-nth N     sample every Nth frame (default 1)
+      --max-frames N    explicit safety cap (default: no cap)
+      --tag TEXT        attach a searchable sequence tag
   nx remember <k> <v>    teach JARVIS a persistent preference
   nx serve [--port N]    web UI on http://127.0.0.1:7788 (for systemd autostart)
   nx stats               index statistics
@@ -121,6 +125,41 @@ async function main() {
     const { startServe } = await import('../lib/serve.js');
     const pIdx = args.indexOf('--port');
     startServe(pIdx !== -1 ? parseInt(args[pIdx + 1], 10) : undefined);
+    return;
+  }
+
+  if (cmd === 'spatialize') {
+    const { spatializeDir } = await import('../lib/spatialize.js');
+    const valueFlags = new Set(['--every-nth', '--max-frames', '--tag']);
+    const targets = [];
+    for (let i = 0; i < args.length; i++) {
+      if (valueFlags.has(args[i])) {
+        i++;
+      } else if (!args[i].startsWith('--')) {
+        targets.push(args[i]);
+      }
+    }
+    if (!targets.length) { usage(); process.exit(1); }
+    const readPositiveInt = (flag, fallback) => {
+      const index = args.indexOf(flag);
+      if (index === -1) return fallback;
+      const value = Number.parseInt(args[index + 1], 10);
+      if (!Number.isInteger(value) || value < 1) throw new Error(`${flag} must be a positive integer`);
+      return value;
+    };
+    const tagIndex = args.indexOf('--tag');
+    const options = {
+      everyNth: readPositiveInt('--every-nth', 1),
+      maxFrames: readPositiveInt('--max-frames', Infinity),
+      tag: tagIndex === -1 ? '' : String(args[tagIndex + 1] || ''),
+    };
+    for (const dir of targets) {
+      console.log(`spatializing: ${dir}`);
+      const r = await spatializeDir(dir, options);
+      console.log(`  indexed ${r.indexed}/${r.processed} of ${r.total_frames} frames`);
+      console.log(`  temporal ${r.continuity_status}: ${r.temporal_events} recurrence event(s)`);
+      console.log(`  manifest ${r.temporal_manifest}`);
+    }
     return;
   }
 
