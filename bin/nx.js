@@ -1,32 +1,25 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-for (const p of [join(__dirname, '..', '.env'), join(homedir(), '.config', 'nx-search', '.env')]) {
-  try {
-    for (const line of readFileSync(p, 'utf8').split('\n')) {
-      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim();
-    }
-  } catch {}
-}
-
+import { isAbsolute, resolve } from 'node:path';
+import { loadNxEnv } from '../lib/env.js';
 import { openDb } from '../lib/db.js';
 import { scan } from '../lib/scanner.js';
+import { startMcpStdio } from '../lib/mcp.js';
+import { indexStats, searchIndex } from '../lib/search.js';
+
+loadNxEnv();
 
 const [, , cmd, ...args] = process.argv;
 
 function usage() {
   console.log(`nx-search — full-text index of all mounted drives + JARVIS
 
-  nx scan [paths...]     index volumes (default: / + both media drives)
+  nx scan [paths...]     index volumes (Windows default: user profile; Linux: / + media drives)
       --rebuild          wipe and reindex from scratch
   nx search <query>      search filenames and file contents
       --name-only        only match filenames/paths
       --limit N          max results (default 25)
+      --json             machine-readable output (MCP/adapter fallback)
+  nx mcp                 stdio MCP adapter for Cursor (nx_search / nx_stats)
   nx ask <question>      JARVIS: natural-language answers over your files (local LLM)
       --no-stream        print answer at once
   nx jarvis              interactive chat loop (exit: quit)
@@ -103,7 +96,8 @@ async function main() {
 
         if (save) {
           const db = openDb();
-          const row = db.prepare('SELECT id, path FROM files WHERE path = ?').get(img.startsWith('/') ? img : `${process.cwd()}/${img}`);
+          const abs = isAbsolute(img) ? img : resolve(img);
+          const row = db.prepare('SELECT id, path FROM files WHERE path = ?').get(abs);
           if (row) {
             const { replaceBody, insertBody } = await import('../lib/db.js');
             replaceBody(db).run(row.id);
@@ -219,8 +213,14 @@ async function main() {
     return;
   }
 
+  if (cmd === 'mcp') {
+    await startMcpStdio();
+    return;
+  }
+
   if (cmd === 'search') {
     const nameOnly = args.includes('--name-only');
+    const asJson = args.includes('--json');
     const limitIdx = args.indexOf('--limit');
     const limit = limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) || 25 : 25;
     const skip = new Set(limitIdx === -1 ? [] : [limitIdx, limitIdx + 1]);
@@ -229,77 +229,61 @@ async function main() {
       .join(' ');
     if (!q) { usage(); process.exit(1); }
 
-    const db = openDb();
-    const safe = q.replace(/"/g, '""');
+    const result = searchIndex(q, {
+      nameOnly,
+      limit,
+      highlight: !asJson && Boolean(process.stdout.isTTY),
+    });
+    if (asJson) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (result.hint && result.emptyIndex) console.log(result.hint);
 
     if (!nameOnly) {
-      const hits = db.prepare(`
-        SELECT path, snippet(content, 1, '\u001b[33m', '\u001b[0m', ' … ', 14) AS snip,
-               bm25(content) AS rank
-        FROM content WHERE content MATCH ?
-        ORDER BY rank LIMIT ?
-      `).all(`"${safe}"`, limit);
-
-      if (hits.length) {
-        console.log(`\ncontent matches (${hits.length}):`);
-        for (const h of hits) {
+      if (result.content.length) {
+        console.log(`\ncontent matches (${result.content.length}):`);
+        for (const h of result.content) {
           const rel = h.path.length > 90 ? '…' + h.path.slice(-89) : h.path;
           console.log(`  ${rel}`);
-          console.log(`    ${h.snip.replace(/\s+/g, ' ').slice(0, 160)}`);
+          console.log(`    ${h.snippet.slice(0, 160)}`);
         }
       } else {
         console.log('no content matches');
       }
     }
 
-    const tokens = q.trim().split(/\s+/).filter(Boolean);
-    const where = tokens.map(() => 'path LIKE ?').join(' AND ');
-    const params = [...tokens.map((t) => `%${t}%`), limit];
-    const nameHits = db.prepare(`
-      SELECT path, size FROM files
-      WHERE ${where}
-      ORDER BY mtime DESC LIMIT ?
-    `).all(...params);
-
-    if (nameHits.length) {
-      console.log(`\nfilename matches (${nameHits.length}):`);
-      for (const h of nameHits) {
+    if (result.filenames.length) {
+      console.log(`\nfilename matches (${result.filenames.length}):`);
+      for (const h of result.filenames) {
         const rel = h.path.length > 90 ? '…' + h.path.slice(-89) : h.path;
-        console.log(`  ${rel}  (${fmtSize(h.size)})`);
+        console.log(`  ${rel}  (${h.sizeLabel})`);
       }
     }
     return;
   }
 
   if (cmd === 'stats') {
-    const db = openDb();
-    const total = db.prepare('SELECT COUNT(*) c FROM files').get().c;
-    const withText = db.prepare("SELECT COUNT(*) c FROM files WHERE text_status='ok'").get().c;
-    const bytes = db.prepare('SELECT SUM(size) s FROM files').get().s || 0;
-    const byVolume = db.prepare(`
-      SELECT volume, COUNT(*) c, SUM(size) s FROM files GROUP BY volume ORDER BY c DESC
-    `).all();
-    const topExt = db.prepare(`
-      SELECT ext, COUNT(*) c FROM files WHERE ext != '' GROUP BY ext ORDER BY c DESC LIMIT 12
-    `).all();
-    console.log(`indexed files: ${total.toLocaleString()} (${fmtSize(bytes)})`);
-    console.log(`full-text bodies: ${withText.toLocaleString()}`);
+    const asJson = args.includes('--json');
+    const stats = indexStats();
+    if (asJson) {
+      console.log(JSON.stringify(stats, null, 2));
+      return;
+    }
+    console.log(`indexed files: ${stats.indexedFiles.toLocaleString()} (${stats.bytesLabel})`);
+    console.log(`full-text bodies: ${stats.fullTextBodies.toLocaleString()}`);
+    if (stats.hint && stats.emptyIndex) console.log(stats.hint);
     console.log('\nby volume:');
-    for (const v of byVolume) console.log(`  ${v.volume.padEnd(30)} ${v.c.toLocaleString().padStart(9)} files  ${fmtSize(v.s || 0)}`);
+    for (const v of stats.byVolume) {
+      console.log(`  ${String(v.volume).padEnd(30)} ${String(v.files.toLocaleString()).padStart(9)} files  ${v.sizeLabel}`);
+    }
     console.log('\ntop extensions:');
-    console.log('  ' + topExt.map((e) => `${e.ext || '(none)'}:${e.c.toLocaleString()}`).join('  '));
+    console.log('  ' + stats.topExtensions.map((e) => `${e.ext}:${e.count.toLocaleString()}`).join('  '));
     return;
   }
 
   usage();
   process.exit(cmd ? 1 : 0);
-}
-
-function fmtSize(n) {
-  if (n > 1e9) return (n / 1e9).toFixed(1) + ' GB';
-  if (n > 1e6) return (n / 1e6).toFixed(1) + ' MB';
-  if (n > 1e3) return (n / 1e3).toFixed(1) + ' KB';
-  return n + ' B';
 }
 
 main().catch((err) => {

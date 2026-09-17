@@ -3,18 +3,38 @@
   "version": "0.1.0",
   "main": "index.js",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
     "scan": "node ./bin/nx.js scan",
-    "search": "node ./bin/nx.js search"
+    "search": "node ./bin/nx.js search",
+    "stats": "node ./bin/nx.js stats",
+    "mcp": "node ./bin/nx-mcp.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "search",
+    "index",
+    "full-text",
+    "local",
+    "files",
+    "mcp",
+    "cursor",
+    "fast-search"
+  ],
+  "author": "warheart1984-ctrl",
   "license": "ISC",
-  "description": "",
+  "description": "Fast local file search with full-text indexing across multiple drives. Index your files once, search instantly.",
   "type": "module",
   "bin": {
-    "nx": "./bin/nx.js"
+    "nx": "./bin/nx.js",
+    "nx-mcp": "./bin/nx-mcp.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/warheart1984-ctrl/nx-search.git"
+  },
+  "bugs": {
+    "url": "https://github.com/warheart1984-ctrl/nx-search/issues"
+  },
+  "homepage": "https://github.com/warheart1984-ctrl/nx-search#readme",
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "mammoth": "^1.12.1",
