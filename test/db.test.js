@@ -1,73 +1,59 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { makeEnv, put } from './helpers.js';
 
-async function withIndex(t, roots = []) {
-  const root = await mkdtemp(join(tmpdir(), 'nx-purge-'));
-  const dbFile = join(root, 'index.db');
-  process.env.NX_SEARCH_DB = dbFile;
-  
-  // Create a config file for the scanner
-  const config = {
-    roots: roots.length > 0 ? roots : [root],
-    secret_exclude_patterns: ['*.secret'],
-    extra_skip_dirs: [],
-    security: {
-      encryption: false,
-      search_result_cap: 50,
-      rate_limit_qpm: 60,
-      audit_logging: false,
-      redaction_patterns: []
-    }
-  };
-  const configPath = join(root, '.nx-search-config.json');
-  await writeFile(configPath, JSON.stringify(config, null, 2));
-  process.env.NX_SEARCH_CONFIG = configPath;
-  
-  const dbMod = await import('../lib/db.js');
-  t.after(async () => {
-    dbMod.closeDb(dbFile);
-    await rm(root, { recursive: true, force: true });
-  });
-  const db = dbMod.openDb();
-  return { db, dbMod, root };
+function addRow(env, db, path, body) {
+  const { id } = env.db.upsertFile(db).get({ path, volume: 'x', name: path.split(/[\\/]/).pop(), ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, path, body);
 }
 
-test('purge-unsafe removes files matching secret patterns', async (t) => {
-  const { db, dbMod, root } = await withIndex(t);
-  
-  // Create a file with a secret pattern in the path
-  const secretFile = join(root, 'test.secret');
-  await import('node:fs/promises').then(fs => fs.writeFile(secretFile, 'secret data'));
-  
-  // Also create a normal file
-  const normalFile = join(root, 'normal.txt');
-  await import('node:fs/promises').then(fs => fs.writeFile(normalFile, 'normal data'));
-  
-  // Scan the root to index files
-  const { scan } = await import('../lib/scanner.js');
-  await scan([root], { rebuild: true });
-  
-  // Check that both files are indexed
-  const totalBefore = db.prepare('SELECT COUNT(*) FROM files').get().c;
-  assert.ok(totalBefore > 0, 'Files should be indexed');
-  
-  // Run purge-unsafe
-  const result = dbMod.purgeUnsafe(db);
-  assert.equal(result.deleted, 1, 'Should delete one file matching secret pattern');
-  
-  // Check that secret file is removed
-  const secretRow = db.prepare('SELECT * FROM files WHERE path = ?').get(secretFile);
-  assert.ok(!secretRow, 'Secret file should be removed from index');
-  
-  // Check that normal file remains
-  const normalRow = db.prepare('SELECT * FROM files WHERE path = ?').get(normalFile);
-  assert.ok(normalRow, 'Normal file should remain indexed');
-  
-  // Also check that content for secret file is removed
-  const contentRows = db.prepare('SELECT * FROM content').all();
-  const hasSecretContent = contentRows.some(row => row.path === secretFile);
-  assert.ok(!hasSecretContent, 'Content for secret file should be removed');
+async function seedUnsafe(env) {
+  await put(env.root, '.gitignore', '*.log\n');
+  const db = env.db.openDb();
+  addRow(env, db, join(env.root, 'server.pem'), 'PRIVATE BODY ONE');
+  addRow(env, db, join(env.root, 'a', 'prod.env'), 'API=two');
+  addRow(env, db, join(env.root, 'MY-SECRET.txt'), 'three');
+  addRow(env, db, join(env.root, 'secrets', 'n.txt'), 'four');
+  addRow(env, db, join(env.root, 'debug.log'), 'five');
+  addRow(env, db, join(env.base, 'elsewhere', 'x.txt'), 'six');
+  addRow(env, db, join(env.root, 'ok', 'readme.txt'), 'plain text about deploys');
+  addRow(env, db, join(env.root, 'ok', 'deploy.txt'), 'deploy key sk-ABCDEFGHIJKLMNOP1234567890 inside');
+  return db;
+}
+
+test('purge-unsafe removes rows the policy does not allow and redacts stored secrets', async (t) => {
+  const env = await makeEnv(t);
+  const db = await seedUnsafe(env);
+  const { purgeUnsafe } = await import('../lib/purge.js');
+  const result = purgeUnsafe(db);
+  assert.equal(result.deleted, 6);
+  assert.deepEqual(result.reasons, { 'secret-file': 3, 'denied-directory': 1, gitignored: 1, 'outside-roots': 1 });
+  assert.equal(result.redacted, 1);
+  assert.equal(result.total, 2);
+  assert.equal(result.compacted, true);
+  assert.deepEqual(db.prepare('SELECT path FROM files ORDER BY path').all().map((r) => r.path.slice(env.root.length + 1).split('\\').join('/')), ['ok/deploy.txt', 'ok/readme.txt']);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM content').get().c, 2);
+  const stored = db.prepare("SELECT body FROM content WHERE path LIKE '%deploy.txt'").get().body;
+  assert.ok(stored.includes('[REDACTED]') && !stored.includes('ABCDEFGHIJKLMNOP1234567890'));
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM content WHERE content MATCH 'PRIVATE'").get().c, 0, 'the removed text is no longer searchable');
+});
+
+test('purge-unsafe --dry-run reports and changes nothing', async (t) => {
+  const env = await makeEnv(t);
+  const db = await seedUnsafe(env);
+  const { purgeUnsafe } = await import('../lib/purge.js');
+  const result = purgeUnsafe(db, { dryRun: true });
+  assert.equal(result.deleted, 6);
+  assert.equal(result.redacted, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM files').get().c, 8);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM content WHERE content MATCH 'PRIVATE'").get().c, 1);
+});
+
+test('purge-unsafe on a clean index does nothing', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  addRow(env, db, join(env.root, 'ok', 'readme.txt'), 'plain text');
+  const { purgeUnsafe } = await import('../lib/purge.js');
+  assert.deepEqual(purgeUnsafe(db), { total: 1, deleted: 0, redacted: 0, reasons: {}, compacted: false, dryRun: false });
 });

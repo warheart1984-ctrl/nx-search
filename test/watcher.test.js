@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { volumeOf } from '../lib/scanner.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -131,9 +132,9 @@ test('pruneMissing removes vanished files only under the given root', async (t) 
   const upsert = dbMod.upsertFile(db);
   const inside = join(root, 'vanished.txt');
   const outside = join(tmpdir(), 'nx-watch-outside-stays.txt');
-  upsert.get({ path: inside, volume: 'C:', name: 'vanished.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
-  upsert.get({ path: outside, volume: 'C:', name: 'nx-watch-outside-stays.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
-  upsert.get({ path: real, volume: 'C:', name: 'real.txt', ext: '.txt', size: 9, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  upsert.get({ path: inside, volume: volumeOf(inside), name: 'vanished.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  upsert.get({ path: outside, volume: volumeOf(outside), name: 'nx-watch-outside-stays.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  upsert.get({ path: real, volume: volumeOf(real), name: 'real.txt', ext: '.txt', size: 9, mtime: 1, indexedAt: 1, textStatus: 'ok' });
 
   const result = await watcherMod.pruneMissing([root]);
   assert.equal(result.removed, 1);

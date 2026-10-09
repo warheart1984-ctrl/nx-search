@@ -2,6 +2,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { loadNxEnv } from '../lib/env.js';
 import { openDb } from '../lib/db.js';
+import { purgeUnsafe } from '../lib/purge.js';
 import { scan } from '../lib/scanner.js';
 import { startMcpStdio } from '../lib/mcp.js';
 import { indexStats, searchIndex } from '../lib/search.js';
@@ -13,7 +14,7 @@ const [, , cmd, ...args] = process.argv;
 function usage() {
   console.log(`nx-search — full-text index of all mounted drives + JARVIS
 
-  nx scan [paths...]     index volumes (Windows default: user profile; Linux: / + media drives)
+  nx scan [paths...]     index the configured roots (any paths given must be inside them)
       --rebuild          wipe and reindex from scratch
   nx search <query>      search filenames and file contents
       --name-only        only match filenames/paths
@@ -37,7 +38,7 @@ function usage() {
   nx stats               index statistics
   nx reindex <path>      rescan a single path incrementally
   nx prune <paths...>     drop index rows for files that no longer exist
-  nx purge-unsafe        remove already-indexed sensitive data (requires config)
+  nx purge-unsafe [--dry-run]  drop indexed rows the current policy would not allow and redact stored secrets
   nx watch [paths...]     watch roots and incrementally maintain the index
       --no-reconcile     skip the startup catch-up pass (adds/changes/missing)
       --debounce N       quiet window before reindexing a changed file (ms)
@@ -121,10 +122,11 @@ async function main() {
   }
 
   if (cmd === 'purge-unsafe') {
-    const { openDb } = await import('../lib/db.js');
-    const db = openDb();
-    const result = purgeUnsafe(db);
-    console.log(`Purge unsafe: total ${result.total}, deleted ${result.deleted}`);
+    const dryRun = args.includes('--dry-run');
+    const result = purgeUnsafe(openDb(), { dryRun });
+    const why = Object.entries(result.reasons).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
+    console.log(`${dryRun ? 'Would purge' : 'Purged'}: ${result.deleted} row(s) the policy does not allow (${why}); ${result.redacted} body(ies) redacted; ${result.total} row(s) ${dryRun ? 'would remain' : 'remain'}`);
+    if (!dryRun && (result.deleted || result.redacted)) console.log(result.compacted ? '  index compacted (FTS optimized, WAL truncated, vacuumed)' : '  WARNING: could not compact the index; removed text may remain in the file until it is vacuumed');
     return;
   }
 
@@ -347,6 +349,10 @@ async function main() {
 }
 
 main().catch((err) => {
+  if (err?.name === 'ScopeError') {
+    console.error(err.message);
+    process.exit(2);
+  }
   console.error(err);
   process.exit(1);
 });
