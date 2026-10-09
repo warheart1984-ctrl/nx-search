@@ -27,7 +27,7 @@ test('the live watcher applies the same policy as scan', async (t) => {
 test('the watcher redacts text before it is stored', async (t) => {
   const env = await makeEnv(t);
   const { update } = await indexer(env);
-  await update(await put(env.root, 'notes.txt', 'token sk-ABCDEFGHIJKLMNOP1234567890 and password = hunter2 and plain words'));
+  await update(await put(env.root, 'notes.txt', 'token sk-ABCDEFGHIJKLMNOP1234567890 here\npassword = hunter2\nplain words'));
   const body = bodyOf(env.db, env.root, 'notes.txt');
   assert.ok(!body.includes('ABCDEFGHIJKLMNOP1234567890') && !body.includes('hunter2'));
   assert.ok(body.includes('plain words'));

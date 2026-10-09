@@ -194,6 +194,11 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'password: |-\n  hunter2\n  line two\nuser: bob': 'password: |-\n  [REDACTED]\nuser: bob',
     'db:\n  password: >\n    secret words\n    more\n  user: bob\nnext: 1': 'db:\n  password: >\n    [REDACTED]\n  user: bob\nnext: 1',
     '- api_key: |\n    abc\n- name: x': '- api_key: |\n    [REDACTED]\n- name: x',
+    'password: |-\r\n  hunter2\r\n  line two\r\nuser: bob': 'password: |-\r\n  [REDACTED]\r\nuser: bob',
+    'password: correct horse battery staple': 'password: [REDACTED]',
+    'PASSWORD=my secret phrase\nOTHER=1': 'PASSWORD=[REDACTED]\nOTHER=1',
+    'token: abc,def and more': 'token: [REDACTED]',
+    'password: "unterminated and then some': 'password: "[REDACTED]"',
   };
   for (const [input, expected] of Object.entries(cases)) {
     assert.equal(redact(input), expected, input);
@@ -262,4 +267,13 @@ test('POSIX system paths are matched case-sensitively: /VAR/project is not under
   assert.equal(p.isSystemPath('/Etc/data'), false);
   await makeEnv(t, { roots: ['/var/project'] });
   assert.equal(code(() => getPolicy({ platform: 'linux' }).resolveRoots()), 'SCOPE_INVALID');
+});
+
+test('operator-named skip directories also refuse roots beneath them', async (t) => {
+  const env = await makeEnv(t, { extra: { extra_skip_dirs: ['private'] } });
+  await mkdir(join(env.base, 'private', 'child'), { recursive: true });
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'private', 'child')], extra_skip_dirs: ['private'], security: { audit_logging: false } }));
+  assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID');
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], extra_skip_dirs: ['private'], security: { audit_logging: false } }));
+  assert.deepEqual(getPolicy().resolveRoots(), [env.root]);
 });
