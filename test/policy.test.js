@@ -195,6 +195,8 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'db:\n  password: >\n    secret words\n    more\n  user: bob\nnext: 1': 'db:\n  password: >\n    [REDACTED]\n  user: bob\nnext: 1',
     '- api_key: |\n    abc\n- name: x': '- api_key: |\n    [REDACTED]\n- name: x',
     'password: |-\r\n  hunter2\r\n  line two\r\nuser: bob': 'password: |-\r\n  [REDACTED]\r\nuser: bob',
+    '  - password: |\n      hunter2\n    username: alice': '  - password: |\n      [REDACTED]\n    username: alice',
+    '- name: x\n  password: |\n    secret\n\n    more\n  other: 1': '- name: x\n  password: |\n    [REDACTED]\n  other: 1',
     'password: correct horse battery staple': 'password: [REDACTED]',
     'PASSWORD=my secret phrase\nOTHER=1': 'PASSWORD=[REDACTED]\nOTHER=1',
     'token: abc,def and more': 'token: [REDACTED]',
@@ -276,4 +278,14 @@ test('operator-named skip directories also refuse roots beneath them', async (t)
   assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID');
   await writeFile(env.configFile, JSON.stringify({ roots: [env.root], extra_skip_dirs: ['private'], security: { audit_logging: false } }));
   assert.deepEqual(getPolicy().resolveRoots(), [env.root]);
+});
+
+test('the shared /tmp directory is denied, but a private folder created under it is an ordinary root', { skip: process.platform === 'win32' }, async (t) => {
+  await makeEnv(t, { roots: ['/tmp'] });
+  const p = getPolicy({ platform: 'linux' });
+  assert.equal(code(() => p.resolveRoots()), 'SCOPE_INVALID');
+  assert.equal(p.isSystemPath('/tmp'), true);
+  assert.equal(p.isSystemPath('/tmp/nx-sandbox/root'), false);
+  assert.equal(p.shouldDescend('/tmp', 'tmp', '/'), false, 'walking from / does not enter /tmp');
+  assert.equal(p.shouldDescend('/home', 'home', '/'), true);
 });
