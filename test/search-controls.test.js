@@ -202,3 +202,16 @@ test('a snippet centres on the passage with the most query terms, not the earlie
   const { retrieve } = await import('../lib/rag.js');
   assert.ok(retrieve('alpha beta').chunks[0].text.includes('beta'));
 });
+
+test('hyphenated and punctuated queries find the passage the index matched', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(60);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, `${filler} the needle phrase is documented here ${filler}`);
+  const hit = env.search.searchIndex('needle-phrase', { highlight: true }).content[0];
+  assert.ok(hit.snippet.includes('documented here'), hit.snippet);
+  assert.match(hit.snippet, /\u001b\[33mneedle\u001b\[0m \u001b\[33mphrase\u001b\[0m/);
+  const { retrieve } = await import('../lib/rag.js');
+  assert.ok(retrieve('needle-phrase').chunks[0].text.includes('documented here'));
+});

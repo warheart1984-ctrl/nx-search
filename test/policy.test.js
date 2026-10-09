@@ -190,6 +190,7 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     '"password": "has spaces in it"': '"password": "[REDACTED]"',
     '{"password":"x\\"hunter2"}': '{"password":"[REDACTED]"}',
     "password: 'it\\'s secret'": "password: '[REDACTED]'",
+    "password: 'pa''hunter2'": "password: '[REDACTED]'",
   };
   for (const [input, expected] of Object.entries(cases)) {
     assert.equal(redact(input), expected, input);
