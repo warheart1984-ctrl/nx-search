@@ -119,3 +119,27 @@ test('the audit log is never indexed, even when it lives inside a configured roo
   const { getPolicy } = await import('../lib/policy.js');
   assert.equal(getPolicy().fileViolation(`${env.root}/audit.log`, { deep: true }), 'internal-file');
 });
+
+test('RAG limits are clamped to 1..cap, so a negative limit cannot return everything', async (t) => {
+  const env = await makeEnv(t, { security: { search_result_cap: 3, rate_limit_qpm: 100 } });
+  await seed(env);
+  const { retrieve } = await import('../lib/rag.js');
+  assert.equal(retrieve('alpha beta', { perQuery: -1, maxChunks: -1 }).chunks.length, 1);
+  assert.equal(retrieve('alpha beta', { perQuery: 0, maxChunks: 5 }).chunks.length, 1, 'zero is raised to 1');
+  assert.equal(retrieve('alpha beta', { maxChunks: Number.NaN }).chunks.length, 3, 'NaN falls back to the default, then the cap');
+  assert.equal(retrieve('alpha beta', { perQuery: 1e9, maxChunks: 1e9 }).chunks.length, 3);
+});
+
+test('the web endpoint applies the rate limit and audit even to cached answers', async (t) => {
+  const env = await makeEnv(t, { security: { rate_limit_qpm: 2 } });
+  await seed(env);
+  const { startServe } = await import('../lib/serve.js');
+  const server = startServe(0);
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await new Promise((resolve) => (server.listening ? resolve() : server.once('listening', resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/api/search?q=alpha&limit=-5`;
+  const statuses = [];
+  for (let i = 0; i < 3; i += 1) statuses.push((await fetch(url)).status);
+  assert.deepEqual(statuses, [200, 200, 429], 'the second request is a cache hit and still counts');
+  assert.equal((await auditOps(env)).filter((e) => e.op === 'rag' && e.caller === 'web').length, 2);
+});

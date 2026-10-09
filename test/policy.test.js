@@ -176,3 +176,22 @@ test('multi-segment denials such as .config/gcloud apply while walking, not only
   assert.equal(p.shouldDescend(join(env.root, '.config'), '.config', env.root), true);
   assert.equal(p.shouldDescend(join(env.root, 'x', '.config', 'other'), 'other', env.root), true);
 });
+
+test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not', async (t) => {
+  await makeEnv(t);
+  const cases = {
+    '{"password":"hunter2"}': '{"password":"[REDACTED]"}',
+    '{"api_key": "abc123", "name": "x"}': '{"api_key": "[REDACTED]", "name": "x"}',
+    "{'token': 'abc123'}": "{'token': '[REDACTED]'}",
+    'password: hunter2': 'password: [REDACTED]',
+    'DB_PASSWORD=hunter2': 'DB_PASSWORD=[REDACTED]',
+    'AWS_SECRET_ACCESS_KEY = abc/def+123': 'AWS_SECRET_ACCESS_KEY = [REDACTED]',
+    'GITHUB_TOKEN="abc123"': 'GITHUB_TOKEN="[REDACTED]"',
+    '"password": "has spaces in it"': '"password": "[REDACTED]"',
+  };
+  for (const [input, expected] of Object.entries(cases)) {
+    assert.equal(redact(input), expected, input);
+    assert.equal(redact(expected), expected, `idempotent: ${expected}`);
+  }
+  assert.equal(redact('tokens are explained in the passwords chapter'), 'tokens are explained in the passwords chapter');
+});
