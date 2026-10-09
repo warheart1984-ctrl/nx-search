@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mkdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { bodyOf, indexedPaths, makeEnv, put } from './helpers.js';
@@ -65,4 +66,17 @@ test('importing the scanner has no side effects: no config is not a process exit
   await makeEnv(t, { roots: [] });
   const mod = await import('../lib/scanner.js');
   assert.equal(typeof mod.scan, 'function');
+});
+
+test('paths are stored as the user gave them, even when the root is reached through a link', { skip: process.platform === 'win32' }, async (t) => {
+  const env = await makeEnv(t);
+  await mkdir(join(env.base, 'real'));
+  await put(env.base, 'real/a.txt', 'inside the linked root');
+  await symlink(join(env.base, 'real'), join(env.base, 'link'));
+  await put(env.base, 'real/.env', 'SECRET=1');
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'link')], security: { audit_logging: false } }));
+  const { scan } = await import('../lib/scanner.js');
+  await scan(undefined, {});
+  assert.deepEqual(env.db.openDb().prepare('SELECT path FROM files').all().map((r) => r.path), [join(env.base, 'link', 'a.txt')]);
 });

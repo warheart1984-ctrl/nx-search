@@ -137,7 +137,7 @@ Typical performance on modern hardware:
 
 ## Requirements
 
-- Node.js 22.13+ (uses the built-in `node:sqlite`)
+- Node.js 22.16+ (uses the built-in `node:sqlite`; earlier 22.x builds have no FTS5)
 - Windows, macOS, or Linux
 - 1GB+ RAM for large indexes
 
