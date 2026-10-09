@@ -1,0 +1,15 @@
+{
+  "roots": [
+    "C:\\Users\\YOU\\Documents"
+  ],
+  "secret_exclude_patterns": [],
+  "extra_skip_dirs": [],
+  "security": {
+    "encryption": false,
+    "search_result_cap": 50,
+    "rate_limit_qpm": 60,
+    "audit_logging": true,
+    "audit_log_queries": false,
+    "redaction_patterns": []
+  }
+}

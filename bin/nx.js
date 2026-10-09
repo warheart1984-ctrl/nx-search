@@ -2,6 +2,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { loadNxEnv } from '../lib/env.js';
 import { openDb } from '../lib/db.js';
+import { purgeUnsafe } from '../lib/purge.js';
 import { scan } from '../lib/scanner.js';
 import { startMcpStdio } from '../lib/mcp.js';
 import { indexStats, searchIndex } from '../lib/search.js';
@@ -13,7 +14,7 @@ const [, , cmd, ...args] = process.argv;
 function usage() {
   console.log(`nx-search — full-text index of all mounted drives + JARVIS
 
-  nx scan [paths...]     index volumes (Windows default: user profile; Linux: / + media drives)
+  nx scan [paths...]     index the configured roots (any paths given must be inside them)
       --rebuild          wipe and reindex from scratch
   nx search <query>      search filenames and file contents
       --name-only        only match filenames/paths
@@ -36,6 +37,11 @@ function usage() {
   nx serve [--port N]    web UI on http://127.0.0.1:7788 (for systemd autostart)
   nx stats               index statistics
   nx reindex <path>      rescan a single path incrementally
+  nx prune <paths...>     drop index rows for files that no longer exist
+  nx purge-unsafe [--dry-run]  drop indexed rows the current policy would not allow and redact stored secrets
+  nx watch [paths...]     watch roots and incrementally maintain the index
+      --no-reconcile     skip the startup catch-up pass (adds/changes/missing)
+      --debounce N       quiet window before reindexing a changed file (ms)
 
 LLM providers (auto if unset): NX_LLM=ollama|nvidia|groq|openrouter|gemini
   ollama (default): local & free — server must run: ollama serve
@@ -65,6 +71,62 @@ async function main() {
     process.stdout.write('\n');
     console.log(`  done: ${result.filesSeen.toLocaleString()} files, ${result.textIndexed.toLocaleString()} searchable bodies in ${result.elapsed}s`);
     console.log(`  index: ${result.dbPath}`);
+    return;
+  }
+
+  if (cmd === 'watch') {
+    const { watchRoots } = await import('../lib/watcher.js');
+    const debounceIdx = args.indexOf('--debounce');
+    const debounceMs = debounceIdx === -1 ? 750 : Number.parseInt(args[debounceIdx + 1], 10);
+    const noReconcile = args.includes('--no-reconcile');
+    const roots = args.filter((a, index) =>
+      !a.startsWith('--') && !(debounceIdx !== -1 && index === debounceIdx + 1),
+    );
+    if (!Number.isInteger(debounceMs) || debounceMs < 50) throw new Error('--debounce must be an integer >= 50');
+    if (!roots.length) { usage(); process.exit(1); }
+    console.log(`watching ${roots.join(', ')} (debounce ${debounceMs}ms)`);
+    const watcher = watchRoots(roots, {
+      debounceMs,
+      reconcile: !noReconcile,
+      onEvent: (event) => {
+        if (event.type === 'error') console.error(`  error ${event.path}: ${event.error.message}`);
+        else if (event.type === 'reconcile') {
+          console.log(`  reconcile: ${event.checked.toLocaleString()} checked, ${event.removed.toLocaleString()} stale removed`);
+        } else if (event.type === 'reconcile-scan') {
+          console.log(`  reconcile scan: ${event.filesSeen.toLocaleString()} files seen, ${event.textIndexed.toLocaleString()} bodies`);
+        } else console.log(`  ${event.type}: ${event.path}`);
+      },
+    });
+    const shutdown = () => { watcher.close(); process.exit(0); };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    return;
+  }
+
+  if (cmd === 'prune') {
+    const { pruneMissing } = await import('../lib/watcher.js');
+    const roots = args.filter((a) => !a.startsWith('--'));
+    if (!roots.length) { usage(); process.exit(1); }
+    const result = await pruneMissing(roots, {
+      onEvent: (event) => {
+        if (event.type === 'reconcile') {
+          process.stdout.write(`\r  checked ${event.checked.toLocaleString()} paths, removed ${event.removed.toLocaleString()} `);
+        } else if (event.type === 'error') {
+          console.error(`  error ${event.path}: ${event.error.message}`);
+        }
+      },
+    });
+    process.stdout.write('\n');
+    console.log(`  pruned ${result.removed.toLocaleString()} stale entries (checked ${result.checked.toLocaleString()})`);
+    return;
+  }
+
+  if (cmd === 'purge-unsafe') {
+    const dryRun = args.includes('--dry-run');
+    const result = purgeUnsafe(openDb(), { dryRun });
+    const why = Object.entries(result.reasons).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
+    console.log(`${dryRun ? 'Would purge' : 'Purged'}: ${result.deleted} row(s) the policy does not allow (${why}); ${result.redacted} body(ies) redacted; ${result.total} row(s) ${dryRun ? 'would remain' : 'remain'}`);
+    if (!dryRun && (result.deleted || result.redacted)) console.log(result.compacted ? '  index compacted (FTS optimized, WAL truncated, vacuumed)' : '  WARNING: could not compact the index; removed text may remain in the file until it is vacuumed');
     return;
   }
 
@@ -287,6 +349,10 @@ async function main() {
 }
 
 main().catch((err) => {
+  if (err?.name === 'ScopeError') {
+    console.error(err.message);
+    process.exit(2);
+  }
   console.error(err);
   process.exit(1);
 });

@@ -8,6 +8,8 @@ async function withIndex(t, seed) {
   const root = await mkdtemp(join(tmpdir(), 'nx-adapter-'));
   const dbFile = join(root, 'index.db');
   process.env.NX_SEARCH_DB = dbFile;
+  process.env.NX_SEARCH_CONFIG = join(root, 'absent.json');
+  process.env.NX_AUDIT_LOG = join(root, 'audit.log');
   const dbMod = await import('../lib/db.js');
   const searchMod = await import('../lib/search.js');
   t.after(async () => {
