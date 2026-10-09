@@ -172,3 +172,20 @@ test('snippets still center on the match and highlight it', async (t) => {
   assert.match(snip, /\u001b\[33minvoice\u001b\[0m/);
   assert.ok(snip.startsWith('… ') && snip.endsWith(' …') && snip.length < 260, snip);
 });
+
+test('in a body over 2 MB a hit deep inside a key block still has its delimiters in view', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const line = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo'; // 35 chars of base64-looking text
+  const half = `${line}\n`.repeat(7000); // ~250k characters on each side of the hit
+  const body = `${'filler words '.repeat(60000)}\n-----BEGIN PRIVATE KEY-----\n${half}deepmiddletoken\n${half}-----END PRIVATE KEY-----\n${'trailing words '.repeat(60000)} pipeline`;
+  assert.ok(body.length > 2_000_000);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/big.txt`, volume: 'x', name: 'big.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/big.txt`, body);
+  const { retrieve } = await import('../lib/rag.js');
+  for (const text of [env.search.searchIndex('deepmiddletoken').content.map((c) => c.snippet).join(' '),
+    retrieve('deepmiddletoken').chunks.map((c) => c.text).join(' ')]) {
+    assert.ok(!text.includes('deepmiddletoken') && !text.includes('QUJDREVG'), text.slice(0, 200));
+  }
+  assert.ok(env.search.searchIndex('pipeline').content[0].snippet.includes('pipeline'));
+});

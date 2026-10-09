@@ -188,6 +188,8 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'AWS_SECRET_ACCESS_KEY = abc/def+123': 'AWS_SECRET_ACCESS_KEY = [REDACTED]',
     'GITHUB_TOKEN="abc123"': 'GITHUB_TOKEN="[REDACTED]"',
     '"password": "has spaces in it"': '"password": "[REDACTED]"',
+    '{"password":"x\\"hunter2"}': '{"password":"[REDACTED]"}',
+    "password: 'it\\'s secret'": "password: '[REDACTED]'",
   };
   for (const [input, expected] of Object.entries(cases)) {
     assert.equal(redact(input), expected, input);
