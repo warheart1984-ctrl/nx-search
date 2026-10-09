@@ -78,3 +78,44 @@ test('an invalid config stops a search instead of disabling the limits', async (
   await put(env.base, 'config.json', '{ broken');
   assert.throws(() => env.search.searchIndex('alpha'), { code: 'CONFIG_INVALID' });
 });
+
+test('highlighting cannot defeat redaction: markers go on after the secret is gone', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/old.txt`, volume: 'x', name: 'old.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/old.txt`, 'deploy key sk-ABCDEFGHIJKLMNOP1234567890 for the pipeline stage');
+  const found = env.search.searchIndex('ABCDEFGHIJKLMNOP1234567890', { highlight: true });
+  const text = found.content.map((c) => c.snippet).join(' ');
+  assert.ok(!text.includes('ABCDEFGHIJKLMNOP1234567890'), text);
+  const lit = env.search.searchIndex('pipeline', { highlight: true }).content[0].snippet;
+  assert.match(lit, /\u001b\[33mpipeline\u001b\[0m/, 'ordinary hits are still highlighted');
+  assert.ok(!lit.includes('') && !lit.includes(''));
+});
+
+test('RAG retrieval has the same result cap, rate limit and audit as search', async (t) => {
+  const env = await makeEnv(t, { security: { search_result_cap: 3, rate_limit_qpm: 2 } });
+  await seed(env);
+  const { retrieve } = await import('../lib/rag.js');
+  const first = retrieve('alpha beta', { perQuery: 20, maxChunks: 20 });
+  assert.equal(first.chunks.length, 3, 'capped at search_result_cap, not the default 14');
+  retrieve('alpha beta');
+  const third = retrieve('alpha beta');
+  assert.equal(third.error, 'RATE_LIMITED');
+  assert.deepEqual(third.chunks, []);
+  const ops = (await auditOps(env)).filter((e) => e.op === 'rag');
+  assert.equal(ops.length, 2, 'every permitted retrieval is audited');
+});
+
+test('the audit log is never indexed, even when it lives inside a configured root', async (t) => {
+  const env = await makeEnv(t);
+  process.env.NX_AUDIT_LOG = `${env.root}/audit.log`;
+  await put(env.root, 'notes.txt', 'ordinary');
+  await put(env.root, 'audit.log', '{"op":"search","query":"my private search terms"}\n');
+  const { scan } = await import('../lib/scanner.js');
+  await scan(undefined, {});
+  const paths = env.db.openDb().prepare('SELECT path FROM files').all().map((r) => r.path.slice(env.root.length + 1));
+  assert.ok(paths.includes('notes.txt'));
+  assert.ok(!paths.includes('audit.log'), 'audit.log was indexed');
+  const { getPolicy } = await import('../lib/policy.js');
+  assert.equal(getPolicy().fileViolation(`${env.root}/audit.log`, { deep: true }), 'internal-file');
+});
