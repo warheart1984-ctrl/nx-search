@@ -203,6 +203,10 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'password: "unterminated and then some': 'password: "[REDACTED]"',
     'password = """hunter2"""': 'password = """[REDACTED]"""',
     'password: correct horse\n  battery staple\nuser: bob': 'password: [REDACTED]\nuser: bob',
+    'settings: {password: hunter2, username: alice, region: us}': 'settings: {password: [REDACTED], username: alice, region: us}',
+    '[token: a b, other: 1]': '[token: [REDACTED], other: 1]',
+    '{token: abc}': '{token: [REDACTED]}',
+    '{"a": 1, password: x y, "token": "q"}': '{"a": 1, password: [REDACTED], "token": "[REDACTED]"}',
     'db:\n  token: abc def\n    ghi jkl\n\n  user: bob': 'db:\n  token: [REDACTED]\n\n  user: bob',
     '- secret: one two\r\n    three\r\n- next: 1': '- secret: [REDACTED]\r\n- next: 1',
     "api_key = '''line one\nline two'''\nname = 'x'": "api_key = '''[REDACTED]'''\nname = 'x'",
@@ -328,4 +332,21 @@ test('Windows UNC forms: admin shares onto system directories are refused, exten
   assert.deepEqual(p.resolveRoots(['\\\\server\\share\\docs\\sub']), ['\\\\server\\share\\docs\\sub']);
   assert.deepEqual(p.resolveRoots(['\\\\?\\UNC\\server\\share\\docs\\sub']), ['\\\\server\\share\\docs\\sub']);
   assert.equal(code(() => p.resolveRoots(['\\\\server\\share\\other'])), 'SCOPE_INVALID', 'outside the configured root');
+});
+
+test('Windows volume-GUID paths keep their meaning and are checked for system directories', async (t) => {
+  await makeEnv(t, { roots: ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs'] });
+  const p = getPolicy({ platform: 'win32' });
+  assert.deepEqual(p.resolveRoots(), ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs'], 'not turned into the relative path Volume{...}\\docs');
+  assert.deepEqual(p.resolveRoots(['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs\\sub']), ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs\\sub']);
+  await makeEnv(t, { roots: ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\Windows\\Temp'] });
+  assert.equal(code(() => getPolicy({ platform: 'win32' }).resolveRoots()), 'SCOPE_INVALID');
+});
+
+test('an explicitly empty list of roots is an error, never "scan everything"', async (t) => {
+  await makeEnv(t);
+  const p = getPolicy();
+  assert.equal(code(() => p.resolveRoots([])), 'SCOPE_INVALID');
+  assert.equal(code(() => p.scanTargets([])), 'SCOPE_INVALID');
+  assert.ok(p.scanTargets(undefined).length > 0, 'omitting the argument still means the configured roots');
 });
