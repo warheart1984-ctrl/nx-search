@@ -248,7 +248,7 @@ test('a root that is itself a denied directory is refused, configured or request
 
 test('a root nested beneath a denied directory is refused, but noise directories above it are fine', async (t) => {
   const env = await makeEnv(t);
-  for (const rel of ['.ssh/work', 'x/.config/gcloud/proj', 'secrets/projects', '.aws/cli/cache', 'a/.gnupg/keys']) {
+  for (const rel of ['.ssh/work', 'x/.config/gcloud/proj', 'secrets/projects', '.aws/cli/cache', 'a/.gnupg/keys', 'repo/.git/logs']) {
     await mkdir(join(env.base, ...rel.split('/')), { recursive: true });
     await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, ...rel.split('/'))], security: { audit_logging: false } }));
     assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID', rel);

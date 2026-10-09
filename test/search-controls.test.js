@@ -244,3 +244,19 @@ test('context-dependent secrets far from the hit are redacted in large bodies to
     for (const text of texts) assert.ok(!text.includes(token) && !text.includes('padding words'), `${token}: ${text.slice(0, 120)}`);
   }
 });
+
+test('the web cache does not outlive a config change', async (t) => {
+  const env = await makeEnv(t, { security: { rate_limit_qpm: 100 } });
+  await seed(env, 8);
+  const { writeFile } = await import('node:fs/promises');
+  const { startServe } = await import('../lib/serve.js');
+  const server = startServe(0);
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await new Promise((resolve) => (server.listening ? resolve() : server.once('listening', resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/api/search?q=alpha&limit=20`;
+  const before = await (await fetch(url)).json();
+  assert.equal(before.results.length, 8);
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { audit_logging: true, rate_limit_qpm: 100, search_result_cap: 2 } }));
+  const after = await (await fetch(url)).json();
+  assert.equal(after.results.length, 2, 'served under the new cap, not from the cache made under the old one');
+});
