@@ -89,7 +89,7 @@ test('highlighting cannot defeat redaction: markers go on after the secret is go
   assert.ok(!text.includes('ABCDEFGHIJKLMNOP1234567890'), text);
   const lit = env.search.searchIndex('pipeline', { highlight: true }).content[0].snippet;
   assert.match(lit, /\u001b\[33mpipeline\u001b\[0m/, 'ordinary hits are still highlighted');
-  assert.ok(!lit.includes('') && !lit.includes(''));
+  assert.ok(!lit.includes('\uE000') && !lit.includes('\uE001'));
 });
 
 test('RAG retrieval has the same result cap, rate limit and audit as search', async (t) => {
@@ -173,7 +173,7 @@ test('snippets still center on the match and highlight it', async (t) => {
   assert.ok(snip.startsWith('… ') && snip.endsWith(' …') && snip.length < 260, snip);
 });
 
-test('in a body over 2 MB a hit deep inside a key block still has its delimiters in view', async (t) => {
+test('a body over 2 MB is redacted whole, so a hit far from its key-block delimiters leaks nothing', async (t) => {
   const env = await makeEnv(t);
   const db = env.db.openDb();
   const line = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo'; // 35 chars of base64-looking text
@@ -226,4 +226,21 @@ test('stemmed matches are shown in context (relational finds "relate")', async (
   assert.ok(hit.snippet.includes('relate the invoices'), hit.snippet);
   const { retrieve } = await import('../lib/rag.js');
   assert.ok(retrieve('relational').chunks[0].text.includes('relate the invoices'));
+});
+
+test('context-dependent secrets far from the hit are redacted in large bodies too (YAML block scalar, configured block)', async (t) => {
+  const env = await makeEnv(t, { security: { redaction_patterns: ['BEGIN SECRET[\\s\\S]*?END SECRET'] } });
+  const db = env.db.openDb();
+  const far = 'padding words here '.repeat(20000);
+  const yaml = `config:\n  password: |\n    ${far}yamldeeptoken ${far}\n  user: bob\n`;
+  const block = `BEGIN SECRET\n${far}blockdeeptoken ${far}\nEND SECRET\n`;
+  const body = `${'x '.repeat(500000)}\n${yaml}\n${block}\nplain pipeline text`;
+  assert.ok(body.length > 2_000_000);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/big.txt`, volume: 'x', name: 'big.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/big.txt`, body);
+  const { retrieve } = await import('../lib/rag.js');
+  for (const token of ['yamldeeptoken', 'blockdeeptoken']) {
+    const texts = [env.search.searchIndex(token).content.map((c) => c.snippet).join(' '), retrieve(token).chunks.map((c) => c.text).join(' ')];
+    for (const text of texts) assert.ok(!text.includes(token) && !text.includes('padding words'), `${token}: ${text.slice(0, 120)}`);
+  }
 });

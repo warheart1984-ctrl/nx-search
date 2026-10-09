@@ -252,3 +252,14 @@ test('a root nested beneath a denied directory is refused, but noise directories
   await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'build', 'proj')], security: { audit_logging: false } }));
   assert.deepEqual(getPolicy().resolveRoots(), [join(env.base, 'build', 'proj')]);
 });
+
+test('POSIX system paths are matched case-sensitively: /VAR/project is not under /var', async (t) => {
+  await makeEnv(t, { roots: ['/VAR/project'] });
+  const p = getPolicy({ platform: 'linux' });
+  assert.deepEqual(p.resolveRoots(), ['/VAR/project']);
+  assert.equal(p.isSystemPath('/var/lib'), true);
+  assert.equal(p.isSystemPath('/VAR/lib'), false);
+  assert.equal(p.isSystemPath('/Etc/data'), false);
+  await makeEnv(t, { roots: ['/var/project'] });
+  assert.equal(code(() => getPolicy({ platform: 'linux' }).resolveRoots()), 'SCOPE_INVALID');
+});
