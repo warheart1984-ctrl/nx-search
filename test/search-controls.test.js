@@ -143,3 +143,32 @@ test('the web endpoint applies the rate limit and audit even to cached answers',
   assert.deepEqual(statuses, [200, 200, 429], 'the second request is a cache hit and still counts');
   assert.equal((await auditOps(env)).filter((e) => e.op === 'rag' && e.caller === 'web').length, 2);
 });
+
+test('a snippet from the middle of a stored private-key block cannot leak it', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const lines = Array.from({ length: 60 }, (_, i) => `QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo${i}middletoken${i}`).join('\n');
+  const body = `deploy notes before\n-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----\nand notes after the pipeline`;
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/old.txt`, volume: 'x', name: 'old.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/old.txt`, body);
+  const { retrieve } = await import('../lib/rag.js');
+  for (const text of [
+    env.search.searchIndex('middletoken30').content.map((c) => c.snippet).join(' '),
+    env.search.searchIndex('middletoken30', { highlight: true }).content.map((c) => c.snippet).join(' '),
+    retrieve('middletoken30').chunks.map((c) => c.text).join(' '),
+  ]) {
+    assert.ok(!text.includes('middletoken') && !text.includes('QUJDREVG'), text);
+  }
+  assert.ok(env.search.searchIndex('pipeline').content[0].snippet.includes('pipeline'), 'ordinary snippets still show the match');
+});
+
+test('snippets still center on the match and highlight it', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet '.repeat(40);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, `${filler}the quarterly invoice total ${filler}`);
+  const snip = env.search.searchIndex('invoice', { highlight: true }).content[0].snippet;
+  assert.match(snip, /\u001b\[33minvoice\u001b\[0m/);
+  assert.ok(snip.startsWith('… ') && snip.endsWith(' …') && snip.length < 260, snip);
+});

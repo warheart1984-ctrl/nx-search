@@ -195,3 +195,29 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
   }
   assert.equal(redact('tokens are explained in the passwords chapter'), 'tokens are explained in the passwords chapter');
 });
+
+test('a root that is a link to / cannot be used to reach system directories', { skip: process.platform === 'win32' }, async (t) => {
+  const env = await makeEnv(t);
+  const alias = join(env.base, 'all');
+  await symlink('/', alias);
+  await writeFile(env.configFile, JSON.stringify({ roots: [alias], security: { audit_logging: false } }));
+  const p = getPolicy();
+  for (const name of ['etc', 'proc', 'var', 'root']) {
+    assert.equal(p.shouldDescend(join(alias, name), name, alias), false, name);
+  }
+  assert.equal(p.shouldDescend(join(alias, 'home'), 'home', alias), true);
+});
+
+test('the audit log is recognised under a linked root too', { skip: process.platform === 'win32' }, async (t) => {
+  const env = await makeEnv(t);
+  await mkdir(join(env.base, 'real'));
+  await symlink(join(env.base, 'real'), join(env.base, 'link'));
+  process.env.NX_AUDIT_LOG = join(env.base, 'real', 'audit.log');
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'link')], security: { audit_logging: false } }));
+  await put(join(env.base, 'link'), 'audit.log', '{"query":"private"}');
+  await put(join(env.base, 'link'), 'notes.txt', 'ordinary');
+  const p = getPolicy();
+  const root = join(env.base, 'link');
+  assert.equal(p.fileViolation(join(root, 'audit.log'), { root }), 'internal-file');
+  assert.equal(p.fileViolation(join(root, 'notes.txt'), { root }), null);
+});
