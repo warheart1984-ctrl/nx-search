@@ -160,3 +160,19 @@ test('configured redaction patterns are applied on top of the built-in ones', as
   await makeEnv(t, { security: { redaction_patterns: ['ACME-[0-9]{4}'] } });
   assert.equal(redact('id ACME-1234 and sk-ABCDEFGHIJKLMNOP1234567890'), 'id [REDACTED] and [REDACTED]');
 });
+
+test('on macOS a sibling that differs only by case is not inside the root', async (t) => {
+  await makeEnv(t, { roots: ['/Volumes/Data/Root'] });
+  const p = getPolicy({ platform: 'darwin' });
+  assert.equal(code(() => p.resolveRoots(['/Volumes/Data/root'])), 'SCOPE_INVALID');
+  assert.deepEqual(p.resolveRoots(['/Volumes/Data/Root/sub']), ['/Volumes/Data/Root/sub']);
+});
+
+test('multi-segment denials such as .config/gcloud apply while walking, not only in watch and purge', async (t) => {
+  const env = await makeEnv(t);
+  const p = getPolicy();
+  assert.equal(p.shouldDescend(join(env.root, '.config', 'gcloud'), 'gcloud', env.root), false);
+  assert.equal(p.shouldDescend(join(env.root, 'x', '.config', 'gcloud'), 'gcloud', env.root), false);
+  assert.equal(p.shouldDescend(join(env.root, '.config'), '.config', env.root), true);
+  assert.equal(p.shouldDescend(join(env.root, 'x', '.config', 'other'), 'other', env.root), true);
+});

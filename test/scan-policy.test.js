@@ -80,3 +80,25 @@ test('paths are stored as the user gave them, even when the root is reached thro
   await scan(undefined, {});
   assert.deepEqual(env.db.openDb().prepare('SELECT path FROM files').all().map((r) => r.path), [join(env.base, 'link', 'a.txt')]);
 });
+
+test('asking for a subdirectory keeps the configured root as the policy boundary', async (t) => {
+  const env = await makeEnv(t);
+  await put(env.root, '.gitignore', 'out\n*.log\n');
+  await put(env.root, '.ssh/config', 'Host x');
+  await put(env.root, 'out/a.txt', 'ignored by the root .gitignore');
+  await put(env.root, 'sub/keep.txt', 'fine');
+  await put(env.root, 'sub/app.log', 'ignored by the root .gitignore');
+  await put(env.root, '.config/gcloud/application_default_credentials.json', '{}');
+  await put(env.root, '.config/other/ok.txt', 'fine');
+  const { scan } = await import('../lib/scanner.js');
+  for (const bad of ['.ssh', 'out', '.config/gcloud']) {
+    await assert.rejects(scan([join(env.root, ...bad.split('/'))], {}), { code: 'SCOPE_INVALID' }, bad);
+  }
+  await scan([join(env.root, 'sub')], {});
+  assert.deepEqual(indexedPaths(env.db, env.root), ['sub/keep.txt'], 'the root .gitignore still applies below a subdirectory request');
+  await scan(undefined, {});
+  const paths = indexedPaths(env.db, env.root);
+  assert.ok(paths.includes('.config/other/ok.txt'));
+  assert.ok(!paths.some((p) => p.includes('gcloud')), 'a full scan skips .config/gcloud too');
+  assert.ok(!paths.some((p) => p.startsWith('.ssh') || p.startsWith('out/') || p.endsWith('.log')));
+});

@@ -46,6 +46,7 @@ test('purge-unsafe --dry-run reports and changes nothing', async (t) => {
   const result = purgeUnsafe(db, { dryRun: true });
   assert.equal(result.deleted, 6);
   assert.equal(result.redacted, 1);
+  assert.equal(result.total, 2, 'a dry run reports the rows that WOULD remain');
   assert.equal(db.prepare('SELECT COUNT(*) c FROM files').get().c, 8);
   assert.equal(db.prepare("SELECT COUNT(*) c FROM content WHERE content MATCH 'PRIVATE'").get().c, 1);
 });
@@ -56,4 +57,15 @@ test('purge-unsafe on a clean index does nothing', async (t) => {
   addRow(env, db, join(env.root, 'ok', 'readme.txt'), 'plain text');
   const { purgeUnsafe } = await import('../lib/purge.js');
   assert.deepEqual(purgeUnsafe(db), { total: 1, deleted: 0, redacted: 0, reasons: {}, compacted: false, dryRun: false });
+});
+
+test('purge-unsafe with no roots configured refuses instead of deleting the whole index', async (t) => {
+  const env = await makeEnv(t, { roots: [] });
+  const db = env.db.openDb();
+  addRow(env, db, join(env.base, 'anywhere', 'a.txt'), 'kept');
+  addRow(env, db, join(env.base, 'anywhere', 'b.txt'), 'kept too');
+  const { purgeUnsafe } = await import('../lib/purge.js');
+  assert.throws(() => purgeUnsafe(db), { code: 'SCOPE_UNCONFIGURED' });
+  assert.throws(() => purgeUnsafe(db, { dryRun: true }), { code: 'SCOPE_UNCONFIGURED' });
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM files').get().c, 2);
 });
