@@ -191,6 +191,9 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     '{"password":"x\\"hunter2"}': '{"password":"[REDACTED]"}',
     "password: 'it\\'s secret'": "password: '[REDACTED]'",
     "password: 'pa''hunter2'": "password: '[REDACTED]'",
+    'password: |-\n  hunter2\n  line two\nuser: bob': 'password: |-\n  [REDACTED]\nuser: bob',
+    'db:\n  password: >\n    secret words\n    more\n  user: bob\nnext: 1': 'db:\n  password: >\n    [REDACTED]\n  user: bob\nnext: 1',
+    '- api_key: |\n    abc\n- name: x': '- api_key: |\n    [REDACTED]\n- name: x',
   };
   for (const [input, expected] of Object.entries(cases)) {
     assert.equal(redact(input), expected, input);
@@ -236,4 +239,16 @@ test('a root that is itself a denied directory is refused, configured or request
   await mkdir(join(env.root, '.ssh'));
   assert.equal(code(() => getPolicy().scanTargets([join(env.root, '.ssh')])), 'SCOPE_INVALID');
   assert.deepEqual(getPolicy().resolveRoots([join(env.root, 'sub')]), [join(env.root, 'sub')]);
+});
+
+test('a root nested beneath a denied directory is refused, but noise directories above it are fine', async (t) => {
+  const env = await makeEnv(t);
+  for (const rel of ['.ssh/work', 'x/.config/gcloud/proj', 'secrets/projects', '.aws/cli/cache', 'a/.gnupg/keys']) {
+    await mkdir(join(env.base, ...rel.split('/')), { recursive: true });
+    await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, ...rel.split('/'))], security: { audit_logging: false } }));
+    assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID', rel);
+  }
+  await mkdir(join(env.base, 'build', 'proj'), { recursive: true });
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'build', 'proj')], security: { audit_logging: false } }));
+  assert.deepEqual(getPolicy().resolveRoots(), [join(env.base, 'build', 'proj')]);
 });

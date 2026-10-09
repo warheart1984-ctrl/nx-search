@@ -211,7 +211,19 @@ test('hyphenated and punctuated queries find the passage the index matched', asy
   env.db.insertBody(db).run(id, `${env.root}/doc.txt`, `${filler} the needle phrase is documented here ${filler}`);
   const hit = env.search.searchIndex('needle-phrase', { highlight: true }).content[0];
   assert.ok(hit.snippet.includes('documented here'), hit.snippet);
-  assert.match(hit.snippet, /\u001b\[33mneedle\u001b\[0m \u001b\[33mphrase\u001b\[0m/);
+  assert.match(hit.snippet, /\u001b\[33mneedle phrase\u001b\[0m/, 'the matched phrase is highlighted');
   const { retrieve } = await import('../lib/rag.js');
   assert.ok(retrieve('needle-phrase').chunks[0].text.includes('documented here'));
+});
+
+test('stemmed matches are shown in context (relational finds "relate")', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(60);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, `${filler} we relate the invoices to purchase orders here ${filler}`);
+  const hit = env.search.searchIndex('relational').content[0];
+  assert.ok(hit.snippet.includes('relate the invoices'), hit.snippet);
+  const { retrieve } = await import('../lib/rag.js');
+  assert.ok(retrieve('relational').chunks[0].text.includes('relate the invoices'));
 });
