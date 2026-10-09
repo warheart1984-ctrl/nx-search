@@ -260,3 +260,33 @@ test('the web cache does not outlive a config change', async (t) => {
   const after = await (await fetch(url)).json();
   assert.equal(after.results.length, 2, 'served under the new cap, not from the cache made under the old one');
 });
+
+test('the index database and its SQLite files are never indexed, even inside a configured root', async (t) => {
+  const env = await makeEnv(t);
+  process.env.NX_SEARCH_DB = `${env.root}/index.db`;
+  await put(env.root, 'notes.txt', 'ordinary');
+  const { getPolicy } = await import('../lib/policy.js');
+  const p = getPolicy();
+  for (const name of ['index.db', 'index.db-wal', 'index.db-shm']) {
+    assert.equal(p.fileViolation(`${env.root}/${name}`, { deep: true }), 'internal-file', name);
+  }
+  assert.equal(p.fileViolation(`${env.root}/notes.txt`, { deep: true }), null);
+  // the scan creates and writes the real database (and its WAL/SHM files) inside the root it is scanning, so this is also
+  // the end-to-end check that it does not catalogue them, now or on the next pass
+  const { scan } = await import('../lib/scanner.js');
+  await scan(undefined, {});
+  await scan(undefined, {});
+  const { readdir } = await import('node:fs/promises');
+  assert.ok((await readdir(env.root)).includes('index.db'), 'the database really is inside the scanned root');
+  const names = env.db.openDb().prepare('SELECT name FROM files').all().map((r) => r.name);
+  assert.deepEqual(names, ['notes.txt']);
+});
+
+test('changing the config to encryption: true stops a process that already has the index open', async (t) => {
+  const env = await makeEnv(t);
+  assert.ok(env.db.openDb(), 'open under the original config, so the connection is cached');
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { encryption: true, audit_logging: false } }));
+  assert.throws(() => env.db.openDb(), { code: 'ENCRYPTION_UNSUPPORTED' });
+  assert.throws(() => env.search.searchIndex('anything'), { code: 'ENCRYPTION_UNSUPPORTED' });
+});
