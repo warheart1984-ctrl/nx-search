@@ -309,3 +309,18 @@ test('an absolute extra_skip_dirs path also blocks a root reached by another spe
   await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'data', 'private')], extra_skip_dirs: [join(env.base, 'blocked-link')], security: { audit_logging: false } }));
   assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID');
 });
+
+test('Windows UNC forms: admin shares onto system directories are refused, extended UNC paths keep their meaning', async (t) => {
+  const refused = ['\\\\localhost\\C$\\Windows\\Temp\\work', '\\\\SERVER\\c$\\Program Files\\x', '\\\\host\\ADMIN$\\System32',
+    '\\\\?\\C:\\Windows\\System32', '\\\\.\\C:\\ProgramData\\x', '\\\\?\\UNC\\localhost\\C$\\Windows\\x'];
+  for (const bad of refused) {
+    await makeEnv(t, { roots: [bad] });
+    assert.equal(code(() => getPolicy({ platform: 'win32' }).resolveRoots()), 'SCOPE_INVALID', bad);
+  }
+  await makeEnv(t, { roots: ['\\\\?\\UNC\\server\\share\\docs'] });
+  const p = getPolicy({ platform: 'win32' });
+  assert.deepEqual(p.resolveRoots(), ['\\\\server\\share\\docs'], 'the extended form becomes the ordinary UNC path, not a relative one');
+  assert.deepEqual(p.resolveRoots(['\\\\server\\share\\docs\\sub']), ['\\\\server\\share\\docs\\sub']);
+  assert.deepEqual(p.resolveRoots(['\\\\?\\UNC\\server\\share\\docs\\sub']), ['\\\\server\\share\\docs\\sub']);
+  assert.equal(code(() => p.resolveRoots(['\\\\server\\share\\other'])), 'SCOPE_INVALID', 'outside the configured root');
+});
