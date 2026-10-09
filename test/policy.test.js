@@ -223,3 +223,16 @@ test('the audit log is recognised under a linked root too', { skip: process.plat
   assert.equal(p.fileViolation(join(root, 'audit.log'), { root }), 'internal-file');
   assert.equal(p.fileViolation(join(root, 'notes.txt'), { root }), null);
 });
+
+test('a root that is itself a denied directory is refused, configured or requested', async (t) => {
+  const env = await makeEnv(t);
+  for (const rel of ['.ssh', '.aws', 'secrets', 'x/.config/gcloud']) {
+    await mkdir(join(env.base, ...rel.split('/')), { recursive: true });
+    await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, ...rel.split('/'))], security: { audit_logging: false } }));
+    assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID', rel);
+  }
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { audit_logging: false } }));
+  await mkdir(join(env.root, '.ssh'));
+  assert.equal(code(() => getPolicy().scanTargets([join(env.root, '.ssh')])), 'SCOPE_INVALID');
+  assert.deepEqual(getPolicy().resolveRoots([join(env.root, 'sub')]), [join(env.root, 'sub')]);
+});

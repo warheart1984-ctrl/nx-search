@@ -189,3 +189,16 @@ test('in a body over 2 MB a hit deep inside a key block still has its delimiters
   }
   assert.ok(env.search.searchIndex('pipeline').content[0].snippet.includes('pipeline'));
 });
+
+test('a snippet centres on the passage with the most query terms, not the earliest mention', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(60);
+  const body = `alpha appears here first. ${filler} the real passage: alpha and beta together with the answer. ${filler}`;
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, body);
+  const snippet = env.search.searchIndex('alpha beta').content[0].snippet;
+  assert.ok(snippet.includes('beta') && snippet.includes('the answer'), snippet);
+  const { retrieve } = await import('../lib/rag.js');
+  assert.ok(retrieve('alpha beta').chunks[0].text.includes('beta'));
+});
