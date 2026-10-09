@@ -279,6 +279,7 @@ test('the index database and its SQLite files are never indexed, even inside a c
   const { readdir } = await import('node:fs/promises');
   assert.ok((await readdir(env.root)).includes('index.db'), 'the database really is inside the scanned root');
   const names = env.db.openDb().prepare('SELECT name FROM files').all().map((r) => r.name);
+  env.db.closeDb(); // the database lives inside the temp root, and Windows will not delete an open file
   assert.deepEqual(names, ['notes.txt']);
 });
 

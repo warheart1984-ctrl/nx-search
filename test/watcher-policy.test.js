@@ -50,3 +50,21 @@ test('watching a root outside the configuration is refused', async (t) => {
   const { getPolicy } = await import('../lib/policy.js');
   assert.throws(() => getPolicy({ requireRoots: true }).resolveRoots([env.base]), { code: 'SCOPE_INVALID' });
 });
+
+test('a running watcher judges each event by the current config, not the one it started with', async (t) => {
+  const env = await makeEnv(t);
+  const { createWatchIndexer } = await import('../lib/watcher.js');
+  const { writeFile } = await import('node:fs/promises');
+  const db = env.db.openDb();
+  const update = createWatchIndexer({ db, onEvent: () => {} }); // the same factory nx watch uses
+  const vault = await put(env.root, 'team.vault', 'ordinary text for now');
+  const note = await put(env.root, 'note.txt', 'token sk-ABCDEFGHIJKLMNOP1234567890 and pipeline words');
+  await update(vault);
+  assert.deepEqual(indexedPaths(env.db, env.root), ['team.vault']);
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], secret_exclude_patterns: ['*.vault'], security: { audit_logging: false, redaction_patterns: ['pipeline words'] } }));
+  await update(vault);
+  assert.deepEqual(indexedPaths(env.db, env.root), [], 'the newly excluded file is dropped on its next event');
+  await update(note);
+  const body = bodyOf(env.db, env.root, 'note.txt');
+  assert.ok(!body.includes('pipeline words') && !body.includes('ABCDEFGHIJKLMNOP1234567890'), body);
+});

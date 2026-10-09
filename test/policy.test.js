@@ -289,3 +289,23 @@ test('the shared /tmp directory is denied, but a private folder created under it
   assert.equal(p.shouldDescend('/tmp', 'tmp', '/'), false, 'walking from / does not enter /tmp');
   assert.equal(p.shouldDescend('/home', 'home', '/'), true);
 });
+
+test('boolean security options must be booleans; a quoted "true" is refused, not read as false', async (t) => {
+  const env = await makeEnv(t);
+  for (const key of ['encryption', 'audit_logging', 'audit_log_queries']) {
+    for (const bad of ['true', 'false', 1, null]) {
+      await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { [key]: bad } }));
+      assert.equal(code(() => loadConfig()), 'CONFIG_INVALID', `${key}=${JSON.stringify(bad)}`);
+    }
+  }
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { encryption: false, audit_logging: true, audit_log_queries: false } }));
+  assert.equal(loadConfig().security.encryption, false);
+});
+
+test('an absolute extra_skip_dirs path also blocks a root reached by another spelling of the same directory', { skip: process.platform === 'win32' }, async (t) => {
+  const env = await makeEnv(t);
+  await mkdir(join(env.base, 'data', 'private'), { recursive: true });
+  await symlink(join(env.base, 'data', 'private'), join(env.base, 'blocked-link'));
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'data', 'private')], extra_skip_dirs: [join(env.base, 'blocked-link')], security: { audit_logging: false } }));
+  assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID');
+});
