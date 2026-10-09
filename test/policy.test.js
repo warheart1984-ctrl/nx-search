@@ -201,6 +201,8 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'PASSWORD=my secret phrase\nOTHER=1': 'PASSWORD=[REDACTED]\nOTHER=1',
     'token: abc,def and more': 'token: [REDACTED]',
     'password: "unterminated and then some': 'password: "[REDACTED]"',
+    'password = """hunter2"""': 'password = """[REDACTED]"""',
+    "api_key = '''line one\nline two'''\nname = 'x'": "api_key = '''[REDACTED]'''\nname = 'x'",
   };
   for (const [input, expected] of Object.entries(cases)) {
     assert.equal(redact(input), expected, input);

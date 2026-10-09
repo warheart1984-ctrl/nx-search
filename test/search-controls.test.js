@@ -291,3 +291,19 @@ test('changing the config to encryption: true stops a process that already has t
   assert.throws(() => env.db.openDb(), { code: 'ENCRYPTION_UNSUPPORTED' });
   assert.throws(() => env.search.searchIndex('anything'), { code: 'ENCRYPTION_UNSUPPORTED' });
 });
+
+test('the audit log is created private to its owner, and an existing loose file is tightened', { skip: process.platform === 'win32' }, async (t) => {
+  const { statSync, chmodSync, writeFileSync } = await import('node:fs');
+  const env = await makeEnv(t);
+  const dir = `${env.base}/auditdir`;
+  process.env.NX_AUDIT_LOG = `${dir}/audit.log`;
+  await seed(env, 1);                                   // the scan writes the first record
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  assert.equal(statSync(`${dir}/audit.log`).mode & 0o777, 0o600);
+  const loose = `${env.base}/loose.log`;
+  writeFileSync(loose, '');
+  chmodSync(loose, 0o644);
+  process.env.NX_AUDIT_LOG = loose;
+  env.search.searchIndex('alpha');
+  assert.equal(statSync(loose).mode & 0o777, 0o600, 'a file that already existed with 0644 is tightened');
+});
