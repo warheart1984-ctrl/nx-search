@@ -55,9 +55,8 @@ async function main() {
     const flags = args.filter((a) => a.startsWith('--'));
     const paths = args.filter((a) => !a.startsWith('--'));
     const rebuild = flags.includes('--rebuild');
-    const roots = cmd === 'reindex'
-      ? paths
-      : paths.length ? paths : undefined;
+    if (cmd === 'reindex' && !paths.length) { usage(); process.exit(1); } // never turn a missing path into a full scan
+    const roots = paths.length ? paths : undefined;
 
     let lastPct = -1;
     const result = await scan(roots, {

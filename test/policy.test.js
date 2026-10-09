@@ -188,10 +188,182 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'AWS_SECRET_ACCESS_KEY = abc/def+123': 'AWS_SECRET_ACCESS_KEY = [REDACTED]',
     'GITHUB_TOKEN="abc123"': 'GITHUB_TOKEN="[REDACTED]"',
     '"password": "has spaces in it"': '"password": "[REDACTED]"',
+    '{"password":"x\\"hunter2"}': '{"password":"[REDACTED]"}',
+    "password: 'it\\'s secret'": "password: '[REDACTED]'",
+    "password: 'pa''hunter2'": "password: '[REDACTED]'",
+    'password: |-\n  hunter2\n  line two\nuser: bob': 'password: |-\n  [REDACTED]\nuser: bob',
+    'db:\n  password: >\n    secret words\n    more\n  user: bob\nnext: 1': 'db:\n  password: >\n    [REDACTED]\n  user: bob\nnext: 1',
+    '- api_key: |\n    abc\n- name: x': '- api_key: |\n    [REDACTED]\n- name: x',
+    'password: |-\r\n  hunter2\r\n  line two\r\nuser: bob': 'password: |-\r\n  [REDACTED]\r\nuser: bob',
+    '  - password: |\n      hunter2\n    username: alice': '  - password: |\n      [REDACTED]\n    username: alice',
+    '- name: x\n  password: |\n    secret\n\n    more\n  other: 1': '- name: x\n  password: |\n    [REDACTED]\n  other: 1',
+    'password: correct horse battery staple': 'password: [REDACTED]',
+    'PASSWORD=my secret phrase\nOTHER=1': 'PASSWORD=[REDACTED]\nOTHER=1',
+    'token: abc,def and more': 'token: [REDACTED]',
+    'password: "unterminated and then some': 'password: "[REDACTED]"',
+    'password = """hunter2"""': 'password = """[REDACTED]"""',
+    'password: correct horse\n  battery staple\nuser: bob': 'password: [REDACTED]\nuser: bob',
+    'settings: {password: hunter2, username: alice, region: us}': 'settings: {password: [REDACTED], username: alice, region: us}',
+    '[token: a b, other: 1]': '[token: [REDACTED], other: 1]',
+    '{token: abc}': '{token: [REDACTED]}',
+    'password:\nusername: alice\nregion: us': 'password:\nusername: alice\nregion: us',
+    'token =\nname = x': 'token =\nname = x',
+    '<password>hunter2</password>': '<password>[REDACTED]</password>',
+    '<db><apiKey type="x"><![CDATA[a<b]]></apiKey><user>bob</user></db>': '<db><apiKey type="x">[REDACTED]</apiKey><user>bob</user></db>',
+    '<Secret_Token>\n  abc\n</Secret_Token>': '<Secret_Token>[REDACTED]</Secret_Token>',
+    '{"password":["hunter2","secret2"],"name":"x"}': '{"password":[REDACTED],"name":"x"}',
+    'password: {a: 1, b: [2, 3]}\nnext: 1': 'password: [REDACTED]\nnext: 1',
+    '{"token": ["a]b", "c"], "n": 1}': '{"token": [REDACTED], "n": 1}',
+    'password = correct horse\n  battery staple\nusername = alice': 'password = [REDACTED]\nusername = alice',
+    '{"a": 1, password: x y, "token": "q"}': '{"a": 1, password: [REDACTED], "token": "[REDACTED]"}',
+    'db:\n  token: abc def\n    ghi jkl\n\n  user: bob': 'db:\n  token: [REDACTED]\n\n  user: bob',
+    '- secret: one two\r\n    three\r\n- next: 1': '- secret: [REDACTED]\r\n- next: 1',
+    "api_key = '''line one\nline two'''\nname = 'x'": "api_key = '''[REDACTED]'''\nname = 'x'",
   };
   for (const [input, expected] of Object.entries(cases)) {
     assert.equal(redact(input), expected, input);
     assert.equal(redact(expected), expected, `idempotent: ${expected}`);
   }
   assert.equal(redact('tokens are explained in the passwords chapter'), 'tokens are explained in the passwords chapter');
+});
+
+test('a root that is a link to / cannot be used to reach system directories', { skip: process.platform === 'win32' }, async (t) => {
+  const env = await makeEnv(t);
+  const alias = join(env.base, 'all');
+  await symlink('/', alias);
+  await writeFile(env.configFile, JSON.stringify({ roots: [alias], security: { audit_logging: false } }));
+  const p = getPolicy();
+  for (const name of ['etc', 'proc', 'var', 'root']) {
+    assert.equal(p.shouldDescend(join(alias, name), name, alias), false, name);
+  }
+  assert.equal(p.shouldDescend(join(alias, 'home'), 'home', alias), true);
+});
+
+test('the audit log is recognised under a linked root too', { skip: process.platform === 'win32' }, async (t) => {
+  const env = await makeEnv(t);
+  await mkdir(join(env.base, 'real'));
+  await symlink(join(env.base, 'real'), join(env.base, 'link'));
+  process.env.NX_AUDIT_LOG = join(env.base, 'real', 'audit.log');
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'link')], security: { audit_logging: false } }));
+  await put(join(env.base, 'link'), 'audit.log', '{"query":"private"}');
+  await put(join(env.base, 'link'), 'notes.txt', 'ordinary');
+  const p = getPolicy();
+  const root = join(env.base, 'link');
+  assert.equal(p.fileViolation(join(root, 'audit.log'), { root }), 'internal-file');
+  assert.equal(p.fileViolation(join(root, 'notes.txt'), { root }), null);
+});
+
+test('a root that is itself a denied directory is refused, configured or requested', async (t) => {
+  const env = await makeEnv(t);
+  for (const rel of ['.ssh', '.aws', 'secrets', 'x/.config/gcloud']) {
+    await mkdir(join(env.base, ...rel.split('/')), { recursive: true });
+    await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, ...rel.split('/'))], security: { audit_logging: false } }));
+    assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID', rel);
+  }
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { audit_logging: false } }));
+  await mkdir(join(env.root, '.ssh'));
+  assert.equal(code(() => getPolicy().scanTargets([join(env.root, '.ssh')])), 'SCOPE_INVALID');
+  assert.deepEqual(getPolicy().resolveRoots([join(env.root, 'sub')]), [join(env.root, 'sub')]);
+});
+
+test('a root nested beneath a denied directory is refused, but noise directories above it are fine', async (t) => {
+  const env = await makeEnv(t);
+  for (const rel of ['.ssh/work', 'x/.config/gcloud/proj', 'secrets/projects', '.aws/cli/cache', 'a/.gnupg/keys', 'repo/.git/logs']) {
+    await mkdir(join(env.base, ...rel.split('/')), { recursive: true });
+    await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, ...rel.split('/'))], security: { audit_logging: false } }));
+    assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID', rel);
+  }
+  await mkdir(join(env.base, 'build', 'proj'), { recursive: true });
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'build', 'proj')], security: { audit_logging: false } }));
+  assert.deepEqual(getPolicy().resolveRoots(), [join(env.base, 'build', 'proj')]);
+});
+
+test('POSIX system paths are matched case-sensitively: /VAR/project is not under /var', async (t) => {
+  await makeEnv(t, { roots: ['/VAR/project'] });
+  const p = getPolicy({ platform: 'linux' });
+  assert.deepEqual(p.resolveRoots(), ['/VAR/project']);
+  assert.equal(p.isSystemPath('/var/lib'), true);
+  assert.equal(p.isSystemPath('/VAR/lib'), false);
+  assert.equal(p.isSystemPath('/Etc/data'), false);
+  await makeEnv(t, { roots: ['/var/project'] });
+  assert.equal(code(() => getPolicy({ platform: 'linux' }).resolveRoots()), 'SCOPE_INVALID');
+});
+
+test('operator-named skip directories also refuse roots beneath them', async (t) => {
+  const env = await makeEnv(t, { extra: { extra_skip_dirs: ['private'] } });
+  await mkdir(join(env.base, 'private', 'child'), { recursive: true });
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'private', 'child')], extra_skip_dirs: ['private'], security: { audit_logging: false } }));
+  assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID');
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], extra_skip_dirs: ['private'], security: { audit_logging: false } }));
+  assert.deepEqual(getPolicy().resolveRoots(), [env.root]);
+});
+
+test('the shared /tmp directory is denied, but a private folder created under it is an ordinary root', { skip: process.platform === 'win32' }, async (t) => {
+  await makeEnv(t, { roots: ['/tmp'] });
+  const p = getPolicy({ platform: 'linux' });
+  assert.equal(code(() => p.resolveRoots()), 'SCOPE_INVALID');
+  assert.equal(p.isSystemPath('/tmp'), true);
+  assert.equal(p.isSystemPath('/tmp/nx-sandbox/root'), false);
+  assert.equal(p.shouldDescend('/tmp', 'tmp', '/'), false, 'walking from / does not enter /tmp');
+  assert.equal(p.shouldDescend('/home', 'home', '/'), true);
+});
+
+test('boolean security options must be booleans; a quoted "true" is refused, not read as false', async (t) => {
+  const env = await makeEnv(t);
+  for (const key of ['encryption', 'audit_logging', 'audit_log_queries']) {
+    for (const bad of ['true', 'false', 1, null]) {
+      await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { [key]: bad } }));
+      assert.equal(code(() => loadConfig()), 'CONFIG_INVALID', `${key}=${JSON.stringify(bad)}`);
+    }
+  }
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { encryption: false, audit_logging: true, audit_log_queries: false } }));
+  assert.equal(loadConfig().security.encryption, false);
+});
+
+test('an absolute extra_skip_dirs path also blocks a root reached by another spelling of the same directory', { skip: process.platform === 'win32' }, async (t) => {
+  const env = await makeEnv(t);
+  await mkdir(join(env.base, 'data', 'private'), { recursive: true });
+  await symlink(join(env.base, 'data', 'private'), join(env.base, 'blocked-link'));
+  await writeFile(env.configFile, JSON.stringify({ roots: [join(env.base, 'data', 'private')], extra_skip_dirs: [join(env.base, 'blocked-link')], security: { audit_logging: false } }));
+  assert.equal(code(() => getPolicy().resolveRoots()), 'SCOPE_INVALID');
+});
+
+test('Windows UNC forms: admin shares onto system directories are refused, extended UNC paths keep their meaning', async (t) => {
+  const refused = ['\\\\localhost\\C$\\Windows\\Temp\\work', '\\\\SERVER\\c$\\Program Files\\x', '\\\\host\\ADMIN$\\System32',
+    '\\\\?\\C:\\Windows\\System32', '\\\\.\\C:\\ProgramData\\x', '\\\\?\\UNC\\localhost\\C$\\Windows\\x'];
+  for (const bad of refused) {
+    await makeEnv(t, { roots: [bad] });
+    assert.equal(code(() => getPolicy({ platform: 'win32' }).resolveRoots()), 'SCOPE_INVALID', bad);
+  }
+  await makeEnv(t, { roots: ['\\\\?\\UNC\\server\\share\\docs'] });
+  const p = getPolicy({ platform: 'win32' });
+  assert.deepEqual(p.resolveRoots(), ['\\\\server\\share\\docs'], 'the extended form becomes the ordinary UNC path, not a relative one');
+  assert.deepEqual(p.resolveRoots(['\\\\server\\share\\docs\\sub']), ['\\\\server\\share\\docs\\sub']);
+  assert.deepEqual(p.resolveRoots(['\\\\?\\UNC\\server\\share\\docs\\sub']), ['\\\\server\\share\\docs\\sub']);
+  assert.equal(code(() => p.resolveRoots(['\\\\server\\share\\other'])), 'SCOPE_INVALID', 'outside the configured root');
+});
+
+test('Windows volume-GUID paths keep their meaning and are checked for system directories', async (t) => {
+  await makeEnv(t, { roots: ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs'] });
+  const p = getPolicy({ platform: 'win32' });
+  assert.deepEqual(p.resolveRoots(), ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs'], 'not turned into the relative path Volume{...}\\docs');
+  assert.deepEqual(p.resolveRoots(['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs\\sub']), ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\docs\\sub']);
+  await makeEnv(t, { roots: ['\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\Windows\\Temp'] });
+  assert.equal(code(() => getPolicy({ platform: 'win32' }).resolveRoots()), 'SCOPE_INVALID');
+});
+
+test('an explicitly empty list of roots is an error, never "scan everything"', async (t) => {
+  await makeEnv(t);
+  const p = getPolicy();
+  assert.equal(code(() => p.resolveRoots([])), 'SCOPE_INVALID');
+  assert.equal(code(() => p.scanTargets([])), 'SCOPE_INVALID');
+  assert.ok(p.scanTargets(undefined).length > 0, 'omitting the argument still means the configured roots');
+});
+
+test('blank entries in roots or extra_skip_dirs are refused, not read as the working directory', async (t) => {
+  const env = await makeEnv(t);
+  for (const bad of [{ roots: [''] }, { roots: ['  '] }, { roots: [env.root, ''] }, { roots: [env.root], extra_skip_dirs: [''] }]) {
+    await writeFile(env.configFile, JSON.stringify({ security: { audit_logging: false }, ...bad }));
+    assert.equal(code(() => loadConfig()), 'CONFIG_INVALID', JSON.stringify(bad));
+  }
 });

@@ -89,7 +89,7 @@ test('highlighting cannot defeat redaction: markers go on after the secret is go
   assert.ok(!text.includes('ABCDEFGHIJKLMNOP1234567890'), text);
   const lit = env.search.searchIndex('pipeline', { highlight: true }).content[0].snippet;
   assert.match(lit, /\u001b\[33mpipeline\u001b\[0m/, 'ordinary hits are still highlighted');
-  assert.ok(!lit.includes('') && !lit.includes(''));
+  assert.ok(!lit.includes('\uE000') && !lit.includes('\uE001'));
 });
 
 test('RAG retrieval has the same result cap, rate limit and audit as search', async (t) => {
@@ -142,4 +142,168 @@ test('the web endpoint applies the rate limit and audit even to cached answers',
   for (let i = 0; i < 3; i += 1) statuses.push((await fetch(url)).status);
   assert.deepEqual(statuses, [200, 200, 429], 'the second request is a cache hit and still counts');
   assert.equal((await auditOps(env)).filter((e) => e.op === 'rag' && e.caller === 'web').length, 2);
+});
+
+test('a snippet from the middle of a stored private-key block cannot leak it', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const lines = Array.from({ length: 60 }, (_, i) => `QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo${i}middletoken${i}`).join('\n');
+  const body = `deploy notes before\n-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----\nand notes after the pipeline`;
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/old.txt`, volume: 'x', name: 'old.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/old.txt`, body);
+  const { retrieve } = await import('../lib/rag.js');
+  for (const text of [
+    env.search.searchIndex('middletoken30').content.map((c) => c.snippet).join(' '),
+    env.search.searchIndex('middletoken30', { highlight: true }).content.map((c) => c.snippet).join(' '),
+    retrieve('middletoken30').chunks.map((c) => c.text).join(' '),
+  ]) {
+    assert.ok(!text.includes('middletoken') && !text.includes('QUJDREVG'), text);
+  }
+  assert.ok(env.search.searchIndex('pipeline').content[0].snippet.includes('pipeline'), 'ordinary snippets still show the match');
+});
+
+test('snippets still center on the match and highlight it', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet '.repeat(40);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, `${filler}the quarterly invoice total ${filler}`);
+  const snip = env.search.searchIndex('invoice', { highlight: true }).content[0].snippet;
+  assert.match(snip, /\u001b\[33minvoice\u001b\[0m/);
+  assert.ok(snip.startsWith('… ') && snip.endsWith(' …') && snip.length < 260, snip);
+});
+
+test('a body over 2 MB is redacted whole, so a hit far from its key-block delimiters leaks nothing', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const line = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo'; // 35 chars of base64-looking text
+  const half = `${line}\n`.repeat(7000); // ~250k characters on each side of the hit
+  const body = `${'filler words '.repeat(60000)}\n-----BEGIN PRIVATE KEY-----\n${half}deepmiddletoken\n${half}-----END PRIVATE KEY-----\n${'trailing words '.repeat(60000)} pipeline`;
+  assert.ok(body.length > 2_000_000);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/big.txt`, volume: 'x', name: 'big.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/big.txt`, body);
+  const { retrieve } = await import('../lib/rag.js');
+  for (const text of [env.search.searchIndex('deepmiddletoken').content.map((c) => c.snippet).join(' '),
+    retrieve('deepmiddletoken').chunks.map((c) => c.text).join(' ')]) {
+    assert.ok(!text.includes('deepmiddletoken') && !text.includes('QUJDREVG'), text.slice(0, 200));
+  }
+  assert.ok(env.search.searchIndex('pipeline').content[0].snippet.includes('pipeline'));
+});
+
+test('a snippet centres on the passage with the most query terms, not the earliest mention', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(60);
+  const body = `alpha appears here first. ${filler} the real passage: alpha and beta together with the answer. ${filler}`;
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, body);
+  const snippet = env.search.searchIndex('alpha beta').content[0].snippet;
+  assert.ok(snippet.includes('beta') && snippet.includes('the answer'), snippet);
+  const { retrieve } = await import('../lib/rag.js');
+  assert.ok(retrieve('alpha beta').chunks[0].text.includes('beta'));
+});
+
+test('hyphenated and punctuated queries find the passage the index matched', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(60);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, `${filler} the needle phrase is documented here ${filler}`);
+  const hit = env.search.searchIndex('needle-phrase', { highlight: true }).content[0];
+  assert.ok(hit.snippet.includes('documented here'), hit.snippet);
+  assert.match(hit.snippet, /\u001b\[33mneedle phrase\u001b\[0m/, 'the matched phrase is highlighted');
+  const { retrieve } = await import('../lib/rag.js');
+  assert.ok(retrieve('needle-phrase').chunks[0].text.includes('documented here'));
+});
+
+test('stemmed matches are shown in context (relational finds "relate")', async (t) => {
+  const env = await makeEnv(t);
+  const db = env.db.openDb();
+  const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(60);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/doc.txt`, volume: 'x', name: 'doc.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/doc.txt`, `${filler} we relate the invoices to purchase orders here ${filler}`);
+  const hit = env.search.searchIndex('relational').content[0];
+  assert.ok(hit.snippet.includes('relate the invoices'), hit.snippet);
+  const { retrieve } = await import('../lib/rag.js');
+  assert.ok(retrieve('relational').chunks[0].text.includes('relate the invoices'));
+});
+
+test('context-dependent secrets far from the hit are redacted in large bodies too (YAML block scalar, configured block)', async (t) => {
+  const env = await makeEnv(t, { security: { redaction_patterns: ['BEGIN SECRET[\\s\\S]*?END SECRET'] } });
+  const db = env.db.openDb();
+  const far = 'padding words here '.repeat(20000);
+  const yaml = `config:\n  password: |\n    ${far}yamldeeptoken ${far}\n  user: bob\n`;
+  const block = `BEGIN SECRET\n${far}blockdeeptoken ${far}\nEND SECRET\n`;
+  const body = `${'x '.repeat(500000)}\n${yaml}\n${block}\nplain pipeline text`;
+  assert.ok(body.length > 2_000_000);
+  const { id } = env.db.upsertFile(db).get({ path: `${env.root}/big.txt`, volume: 'x', name: 'big.txt', ext: '.txt', size: 1, mtime: 1, indexedAt: 1, textStatus: 'ok' });
+  env.db.insertBody(db).run(id, `${env.root}/big.txt`, body);
+  const { retrieve } = await import('../lib/rag.js');
+  for (const token of ['yamldeeptoken', 'blockdeeptoken']) {
+    const texts = [env.search.searchIndex(token).content.map((c) => c.snippet).join(' '), retrieve(token).chunks.map((c) => c.text).join(' ')];
+    for (const text of texts) assert.ok(!text.includes(token) && !text.includes('padding words'), `${token}: ${text.slice(0, 120)}`);
+  }
+});
+
+test('the web cache does not outlive a config change', async (t) => {
+  const env = await makeEnv(t, { security: { rate_limit_qpm: 100 } });
+  await seed(env, 8);
+  const { writeFile } = await import('node:fs/promises');
+  const { startServe } = await import('../lib/serve.js');
+  const server = startServe(0);
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await new Promise((resolve) => (server.listening ? resolve() : server.once('listening', resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/api/search?q=alpha&limit=20`;
+  const before = await (await fetch(url)).json();
+  assert.equal(before.results.length, 8);
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { audit_logging: true, rate_limit_qpm: 100, search_result_cap: 2 } }));
+  const after = await (await fetch(url)).json();
+  assert.equal(after.results.length, 2, 'served under the new cap, not from the cache made under the old one');
+});
+
+test('the index database and its SQLite files are never indexed, even inside a configured root', async (t) => {
+  const env = await makeEnv(t);
+  process.env.NX_SEARCH_DB = `${env.root}/index.db`;
+  await put(env.root, 'notes.txt', 'ordinary');
+  const { getPolicy } = await import('../lib/policy.js');
+  const p = getPolicy();
+  for (const name of ['index.db', 'index.db-wal', 'index.db-shm']) {
+    assert.equal(p.fileViolation(`${env.root}/${name}`, { deep: true }), 'internal-file', name);
+  }
+  assert.equal(p.fileViolation(`${env.root}/notes.txt`, { deep: true }), null);
+  // the scan creates and writes the real database (and its WAL/SHM files) inside the root it is scanning, so this is also
+  // the end-to-end check that it does not catalogue them, now or on the next pass
+  const { scan } = await import('../lib/scanner.js');
+  await scan(undefined, {});
+  await scan(undefined, {});
+  const { readdir } = await import('node:fs/promises');
+  assert.ok((await readdir(env.root)).includes('index.db'), 'the database really is inside the scanned root');
+  const names = env.db.openDb().prepare('SELECT name FROM files').all().map((r) => r.name);
+  env.db.closeDb(); // the database lives inside the temp root, and Windows will not delete an open file
+  assert.deepEqual(names, ['notes.txt']);
+});
+
+test('changing the config to encryption: true stops a process that already has the index open', async (t) => {
+  const env = await makeEnv(t);
+  assert.ok(env.db.openDb(), 'open under the original config, so the connection is cached');
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(env.configFile, JSON.stringify({ roots: [env.root], security: { encryption: true, audit_logging: false } }));
+  assert.throws(() => env.db.openDb(), { code: 'ENCRYPTION_UNSUPPORTED' });
+  assert.throws(() => env.search.searchIndex('anything'), { code: 'ENCRYPTION_UNSUPPORTED' });
+});
+
+test('the audit log is created private to its owner, and an existing loose file is tightened', { skip: process.platform === 'win32' }, async (t) => {
+  const { statSync, chmodSync, writeFileSync } = await import('node:fs');
+  const env = await makeEnv(t);
+  const dir = `${env.base}/auditdir`;
+  process.env.NX_AUDIT_LOG = `${dir}/audit.log`;
+  await seed(env, 1);                                   // the scan writes the first record
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  assert.equal(statSync(`${dir}/audit.log`).mode & 0o777, 0o600);
+  const loose = `${env.base}/loose.log`;
+  writeFileSync(loose, '');
+  chmodSync(loose, 0o644);
+  process.env.NX_AUDIT_LOG = loose;
+  env.search.searchIndex('alpha');
+  assert.equal(statSync(loose).mode & 0o777, 0o600, 'a file that already existed with 0644 is tightened');
 });

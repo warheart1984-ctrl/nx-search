@@ -102,3 +102,26 @@ test('asking for a subdirectory keeps the configured root as the policy boundary
   assert.ok(!paths.some((p) => p.includes('gcloud')), 'a full scan skips .config/gcloud too');
   assert.ok(!paths.some((p) => p.startsWith('.ssh') || p.startsWith('out/') || p.endsWith('.log')));
 });
+
+test('scan([]) with --rebuild neither scans nor clears the index', async (t) => {
+  const env = await makeEnv(t);
+  await put(env.root, 'keep.txt', 'already indexed');
+  const { scan } = await import('../lib/scanner.js');
+  await scan(undefined, {});
+  assert.deepEqual(indexedPaths(env.db, env.root), ['keep.txt']);
+  await assert.rejects(scan([], { rebuild: true }), { code: 'SCOPE_INVALID' });
+  assert.deepEqual(indexedPaths(env.db, env.root), ['keep.txt'], 'the rebuild must not have run');
+});
+
+test('nx reindex with no path prints usage and does nothing', async (t) => {
+  const env = await makeEnv(t);
+  await put(env.root, 'keep.txt', 'already indexed');
+  const { scan } = await import('../lib/scanner.js');
+  await scan(undefined, {});
+  env.db.closeDb();
+  const { spawnSync } = await import('node:child_process');
+  const run = spawnSync(process.execPath, ['bin/nx.js', 'reindex', '--rebuild'], { cwd: new URL('..', import.meta.url), env: { ...process.env }, encoding: 'utf8' });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr + run.stdout, /nx reindex/);
+  assert.deepEqual(indexedPaths(env.db, env.root), ['keep.txt']);
+});
