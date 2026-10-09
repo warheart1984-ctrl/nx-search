@@ -1,18 +1,14 @@
 import assert from 'node:assert/strict';
-import { access } from 'node:fs/promises';
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import sharp from 'sharp';
 
-const HOLO_CORE =
-  '/media/jon/New Volume/Mandala Rendering Software/mrs/packages/renderer-core/src/render/rt4d/holort4d/spatial-tokens/index.js';
+const { holoCorePath } = await import('../lib/vision.js');
 
 test('records exact reappearance without inventing identity or occlusion', async (t) => {
-  try {
-    await access(HOLO_CORE);
-  } catch {
+  if (!holoCorePath()) {
     t.skip('HoloRT4D spatial token core is not mounted on this machine');
     return;
   }

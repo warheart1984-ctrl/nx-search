@@ -36,6 +36,11 @@ function usage() {
   nx serve [--port N]    web UI on http://127.0.0.1:7788 (for systemd autostart)
   nx stats               index statistics
   nx reindex <path>      rescan a single path incrementally
+  nx prune <paths...>     drop index rows for files that no longer exist
+  nx purge-unsafe        remove already-indexed sensitive data (requires config)
+  nx watch [paths...]     watch roots and incrementally maintain the index
+      --no-reconcile     skip the startup catch-up pass (adds/changes/missing)
+      --debounce N       quiet window before reindexing a changed file (ms)
 
 LLM providers (auto if unset): NX_LLM=ollama|nvidia|groq|openrouter|gemini
   ollama (default): local & free — server must run: ollama serve
@@ -65,6 +70,61 @@ async function main() {
     process.stdout.write('\n');
     console.log(`  done: ${result.filesSeen.toLocaleString()} files, ${result.textIndexed.toLocaleString()} searchable bodies in ${result.elapsed}s`);
     console.log(`  index: ${result.dbPath}`);
+    return;
+  }
+
+  if (cmd === 'watch') {
+    const { watchRoots } = await import('../lib/watcher.js');
+    const debounceIdx = args.indexOf('--debounce');
+    const debounceMs = debounceIdx === -1 ? 750 : Number.parseInt(args[debounceIdx + 1], 10);
+    const noReconcile = args.includes('--no-reconcile');
+    const roots = args.filter((a, index) =>
+      !a.startsWith('--') && !(debounceIdx !== -1 && index === debounceIdx + 1),
+    );
+    if (!Number.isInteger(debounceMs) || debounceMs < 50) throw new Error('--debounce must be an integer >= 50');
+    if (!roots.length) { usage(); process.exit(1); }
+    console.log(`watching ${roots.join(', ')} (debounce ${debounceMs}ms)`);
+    const watcher = watchRoots(roots, {
+      debounceMs,
+      reconcile: !noReconcile,
+      onEvent: (event) => {
+        if (event.type === 'error') console.error(`  error ${event.path}: ${event.error.message}`);
+        else if (event.type === 'reconcile') {
+          console.log(`  reconcile: ${event.checked.toLocaleString()} checked, ${event.removed.toLocaleString()} stale removed`);
+        } else if (event.type === 'reconcile-scan') {
+          console.log(`  reconcile scan: ${event.filesSeen.toLocaleString()} files seen, ${event.textIndexed.toLocaleString()} bodies`);
+        } else console.log(`  ${event.type}: ${event.path}`);
+      },
+    });
+    const shutdown = () => { watcher.close(); process.exit(0); };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    return;
+  }
+
+  if (cmd === 'prune') {
+    const { pruneMissing } = await import('../lib/watcher.js');
+    const roots = args.filter((a) => !a.startsWith('--'));
+    if (!roots.length) { usage(); process.exit(1); }
+    const result = await pruneMissing(roots, {
+      onEvent: (event) => {
+        if (event.type === 'reconcile') {
+          process.stdout.write(`\r  checked ${event.checked.toLocaleString()} paths, removed ${event.removed.toLocaleString()} `);
+        } else if (event.type === 'error') {
+          console.error(`  error ${event.path}: ${event.error.message}`);
+        }
+      },
+    });
+    process.stdout.write('\n');
+    console.log(`  pruned ${result.removed.toLocaleString()} stale entries (checked ${result.checked.toLocaleString()})`);
+    return;
+  }
+
+  if (cmd === 'purge-unsafe') {
+    const { openDb } = await import('../lib/db.js');
+    const db = openDb();
+    const result = purgeUnsafe(db);
+    console.log(`Purge unsafe: total ${result.total}, deleted ${result.deleted}`);
     return;
   }
 

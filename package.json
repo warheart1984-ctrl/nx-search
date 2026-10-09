@@ -23,6 +23,9 @@
   "license": "ISC",
   "description": "Fast local file search with full-text indexing across multiple drives. Index your files once, search instantly.",
   "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
   "bin": {
     "nx": "./bin/nx.js",
     "nx-mcp": "./bin/nx-mcp.js"

@@ -1,0 +1,37 @@
+{
+  "roots": [],
+  "secret_exclude_patterns": [
+    "*.env*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "id_rsa*",
+    "id_ed25519*",
+    "credentials*.json",
+    "*secret*",
+    "*.kdbx",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    ".git-credentials",
+    "secrets/",
+    "passwords/",
+    "credentials/"
+  ],
+  "extra_skip_dirs": [],
+  "security": {
+    "encryption": false,
+    "search_result_cap": 50,
+    "rate_limit_qpm": 60,
+    "audit_logging": true,
+    "gitignore_paths": ["."],
+    "redaction_patterns": [
+      "-----BEGIN .*PRIVATE KEY-----",
+      "AKIA[0-9A-Z]{16}",
+      "ghp_|github_pat_",
+      "sk-|xox[bp]-",
+      "(api_key|password|secret|token)\\s*[:=]\\s*\\S+"
+    ]
+  }
+}

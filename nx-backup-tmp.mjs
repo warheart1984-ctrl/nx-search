@@ -1,0 +1,11 @@
+﻿import Database from 'better-sqlite3';
+const src = new Database(process.env.USERPROFILE + '/.local/share/nx-search/index.db', { readonly: true, fileMustExist: true });
+const t = Date.now();
+await src.backup('G:/nx-refresh-tmp/snapshot.db', { progress: ({totalPages, remainingPages}) => { return 20000; } });
+src.close();
+const s = new Database('G:/nx-refresh-tmp/snapshot.db');
+s.pragma('journal_mode = DELETE');
+const ic = s.pragma('integrity_check(1)', { simple: true });
+const n = s.prepare('select count(*) c from files').get().c;
+s.close();
+console.log(JSON.stringify({ secs: (Date.now()-t)/1000, files: n, integrity: ic }));
