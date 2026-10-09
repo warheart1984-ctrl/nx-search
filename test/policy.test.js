@@ -206,6 +206,10 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'settings: {password: hunter2, username: alice, region: us}': 'settings: {password: [REDACTED], username: alice, region: us}',
     '[token: a b, other: 1]': '[token: [REDACTED], other: 1]',
     '{token: abc}': '{token: [REDACTED]}',
+    '{"password":["hunter2","secret2"],"name":"x"}': '{"password":[REDACTED],"name":"x"}',
+    'password: {a: 1, b: [2, 3]}\nnext: 1': 'password: [REDACTED]\nnext: 1',
+    '{"token": ["a]b", "c"], "n": 1}': '{"token": [REDACTED], "n": 1}',
+    'password = correct horse\n  battery staple\nusername = alice': 'password = [REDACTED]\nusername = alice',
     '{"a": 1, password: x y, "token": "q"}': '{"a": 1, password: [REDACTED], "token": "[REDACTED]"}',
     'db:\n  token: abc def\n    ghi jkl\n\n  user: bob': 'db:\n  token: [REDACTED]\n\n  user: bob',
     '- secret: one two\r\n    three\r\n- next: 1': '- secret: [REDACTED]\r\n- next: 1',
@@ -349,4 +353,12 @@ test('an explicitly empty list of roots is an error, never "scan everything"', a
   assert.equal(code(() => p.resolveRoots([])), 'SCOPE_INVALID');
   assert.equal(code(() => p.scanTargets([])), 'SCOPE_INVALID');
   assert.ok(p.scanTargets(undefined).length > 0, 'omitting the argument still means the configured roots');
+});
+
+test('blank entries in roots or extra_skip_dirs are refused, not read as the working directory', async (t) => {
+  const env = await makeEnv(t);
+  for (const bad of [{ roots: [''] }, { roots: ['  '] }, { roots: [env.root, ''] }, { roots: [env.root], extra_skip_dirs: [''] }]) {
+    await writeFile(env.configFile, JSON.stringify({ security: { audit_logging: false }, ...bad }));
+    assert.equal(code(() => loadConfig()), 'CONFIG_INVALID', JSON.stringify(bad));
+  }
 });
