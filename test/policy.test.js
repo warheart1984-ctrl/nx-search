@@ -202,6 +202,9 @@ test('redaction covers JSON, YAML, env and INI forms of a secret, quoted or not'
     'token: abc,def and more': 'token: [REDACTED]',
     'password: "unterminated and then some': 'password: "[REDACTED]"',
     'password = """hunter2"""': 'password = """[REDACTED]"""',
+    'password: correct horse\n  battery staple\nuser: bob': 'password: [REDACTED]\nuser: bob',
+    'db:\n  token: abc def\n    ghi jkl\n\n  user: bob': 'db:\n  token: [REDACTED]\n\n  user: bob',
+    '- secret: one two\r\n    three\r\n- next: 1': '- secret: [REDACTED]\r\n- next: 1',
     "api_key = '''line one\nline two'''\nname = 'x'": "api_key = '''[REDACTED]'''\nname = 'x'",
   };
   for (const [input, expected] of Object.entries(cases)) {
