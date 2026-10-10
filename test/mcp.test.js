@@ -8,6 +8,7 @@ test('MCP adapter initializes, lists tools, and returns search evidence', async 
   const root = await mkdtemp(join(tmpdir(), 'nx-mcp-'));
   const dbFile = join(root, 'index.db');
   process.env.NX_SEARCH_DB = dbFile;
+  process.env.JARVIS_NX_ENABLED = '1'; // the bridge is opt-in
   const { openDb, closeDb, upsertFile, replaceBody, insertBody } = await import('../lib/db.js');
   const { handleMcpMessage, NX_MCP_TOOLS } = await import('../lib/mcp.js');
   t.after(async () => {
@@ -66,4 +67,21 @@ test('MCP adapter initializes, lists tools, and returns search evidence', async 
   });
   const statPayload = JSON.parse(stats.result.content[0].text);
   assert.equal(statPayload.indexedFiles, 1);
+});
+
+test('the bridge is off unless JARVIS_NX_ENABLED=1, and the flag is read per request (a .env loaded after import counts)', async () => {
+  const { handleMcpMessage } = await import('../lib/mcp.js');
+  const saved = process.env.JARVIS_NX_ENABLED;
+  try {
+    delete process.env.JARVIS_NX_ENABLED;
+    const off = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.match(off.error.message, /^NX_DISABLED/);
+    process.env.JARVIS_NX_ENABLED = '1'; // set after the module was imported, as loadNxEnv() does
+    const on = await handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    assert.ok(on.result.tools.length > 0);
+    process.env.JARVIS_NX_ENABLED = 'true'; // only "1" enables
+    assert.match((await handleMcpMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list' })).error.message, /^NX_DISABLED/);
+  } finally {
+    if (saved === undefined) delete process.env.JARVIS_NX_ENABLED; else process.env.JARVIS_NX_ENABLED = saved;
+  }
 });
