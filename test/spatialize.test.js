@@ -41,6 +41,10 @@ test('records exact reappearance without inventing identity or occlusion', async
 
     const manifest = JSON.parse(await readFile(result.temporal_manifest, 'utf8'));
     assert.equal(manifest.scheme, 'HoloRT4D-Temporal-V1');
+    assert.ok(manifest.spatial_core, 'manifest must record which token core produced it');
+    assert.match(manifest.spatial_core.sha256, /^[0-9a-f]{64}$/);
+    assert.ok(manifest.spatial_core.path.endsWith('index.js'));
+    assert.equal(manifest.spatial_core.scheme, 'HoloRT4D-Spatial-V1');
     assert.equal(manifest.frames[2].relation, 'reappeared_exact');
     assert.equal(manifest.frames[2].matched_frame, 'frame_001.png');
     assert.equal(manifest.frames[2].semantic_identity, 'unknown');

@@ -120,13 +120,13 @@ async function main() {
     return;
   }
 
-  if (cmd === 'purge-unsafe') {
-    const { openDb } = await import('../lib/db.js');
+if (cmd === 'purge-unsafe') {
+    const { openDb, purgeUnsafe } = await import('../lib/db.js');
     const db = openDb();
     const result = purgeUnsafe(db);
-    console.log(`Purge unsafe: total ${result.total}, deleted ${result.deleted}`);
+    console.log(`Purge unsafe: total files ${result.total}, deleted ${result.deleted}`);
     return;
-  }
+}
 
   if (cmd === 'describe') {
     const { describeFull, visionDescribe, holoTokensForImage } = await import('../lib/vision.js');

@@ -17,12 +17,12 @@ Fast local file search with full-text indexing across multiple drives. Index you
 nx-search now includes comprehensive security features to protect sensitive data:
 
 - **Scope allowlist** - Only index directories specified in the config file (nx-search-config.json). No default indexing.
-- **Secret file exclusion** - Built-in patterns exclude .env, *.pem, *.key, credentials*.json, and other secret files.
+- **Secret file exclusion** - Built-in patterns exclude .env, .pem, .key, credentials.json, and other secret files.
 - **Content redaction** - Secrets found in files are redacted in the index (e.g., passwords, API keys).
 - **System path protection** - Hard-deny list prevents indexing of Windows system directories, Program Files, etc.
 - **Gitignore respect** - Respects .gitignore files by default.
-- **Index encryption** - Optional encryption support (requires SQLCipher or set NX_SEARCH_ENCRYPTION_KEY).
-- **Audit logging** - All searches and scans are logged to ~/.local/share/nx-search/audit.log.
+- **Index encryption** - Optional encryption support (not yet implemented; enabling the flag will block startup).
+- **Audit logging** - All scans and searches are logged to `~/.local/share/nx-search/audit.log`.
 - **Rate limiting** - Configurable queries per minute limit.
 - **Result caps** - Maximum results per query configurable.
 - **Purge-unsafe command** - `nx purge-unsafe` removes already-indexed sensitive data.
@@ -88,7 +88,7 @@ nx search --name-only "filename"
 # Check index statistics
 nx stats --json
 
-# Keep selected Windows roots current as files change
+# Keep selected roots current as files change
 nx watch "D:\\Evolving Ai" "G:\\Project Finish" --debounce 750
 
 # Drop index rows for files that no longer exist
@@ -136,14 +136,13 @@ npm run mcp
 
 ## Performance
 
-Typical performance on modern hardware:
 - **Indexing:** ~1000 files/second
 - **Search:** Sub-second across 400K+ files
 - **Storage:** ~1-2 MB per 1000 files indexed
 
 ## Requirements
 
-- Node.js 22.13+ (uses the built-in `node:sqlite`)
+- Node.js 22.13+ (uses built-in `node:sqlite`)
 - Windows, macOS, or Linux
 - 1GB+ RAM for large indexes
 
